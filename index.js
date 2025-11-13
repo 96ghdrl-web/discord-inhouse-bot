@@ -9,19 +9,6 @@
 // --------- Render에서 credentials.json 생성 ---------
 const fs = require("fs");
 const http = require("http");
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  // Render에서 쓰기 가능한 임시 저장소(/tmp)에 파일 생성
-  try {
-    fs.writeFileSync(
-      "/tmp/credentials.json",
-      process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
-    );
-    console.log("credentials.json saved to /tmp/credentials.json");
-  } catch (e) {
-    console.error("Failed to write credentials.json:", e);
-  }
-}
-
 require("dotenv").config();
 
 const {
@@ -55,14 +42,25 @@ const client = new Client({
 });
 
 // --------- 구글 시트 인증 ----------
-const keyFilePath = fs.existsSync("/tmp/credentials.json")
-  ? "/tmp/credentials.json"
-  : "./credentials.json";
+// Render(배포 환경)에서는 환경변수의 JSON을 그대로 사용
+// 로컬에서는 credentials.json 파일을 사용
+let googleAuthOptions;
 
-const auth = new google.auth.GoogleAuth({
-  keyFile: keyFilePath,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-});
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+  // Render 등 환경변수 기반
+  googleAuthOptions = {
+    credentials: JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  };
+} else {
+  // 로컬 개발용 (credentials.json 파일)
+  googleAuthOptions = {
+    keyFile: "./credentials.json",
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  };
+}
+
+const auth = new google.auth.GoogleAuth(googleAuthOptions);
 const sheets = google.sheets({ version: "v4", auth });
 
 // 시트 정보
@@ -506,4 +504,5 @@ http.createServer((req, res) => {
 // 디스코드 봇 로그인
 client.login(BOT_TOKEN);
 // ===============================
+
 
