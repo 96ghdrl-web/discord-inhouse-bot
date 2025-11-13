@@ -8,7 +8,7 @@
 
 // --------- Render에서 credentials.json 생성 ---------
 const fs = require("fs");
-
+const http = require("http");
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   // Render에서 쓰기 가능한 임시 저장소(/tmp)에 파일 생성
   try {
@@ -492,5 +492,18 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ===============================
+// Render 무료 Web Service용 더미 HTTP 서버
+// ===============================
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Bot is running\n");
+}).listen(PORT, () => {
+  console.log(`HTTP server listening on port ${PORT}`);
+});
+
+// 디스코드 봇 로그인
 client.login(BOT_TOKEN);
 // ===============================
+
