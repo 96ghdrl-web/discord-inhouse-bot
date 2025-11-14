@@ -6,7 +6,6 @@
 // - /re : 20명 명단을 다시 참가자10 + 대기자로 되돌리고 10모드 복귀
 // ===============================
 
-// --------- Render에서 credentials.json 생성 ---------
 const fs = require("fs");
 const http = require("http");
 require("dotenv").config();
@@ -50,13 +49,13 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   // Render 등 환경변수 기반
   googleAuthOptions = {
     credentials: JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
   };
 } else {
   // 로컬 개발용 (credentials.json 파일)
   googleAuthOptions = {
     keyFile: "./credentials.json",
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
   };
 }
 
@@ -65,8 +64,8 @@ const sheets = google.sheets({ version: "v4", auth });
 
 // 시트 정보
 const SHEET_NAME = "대진표";
-const RANGE_10P = `${SHEET_NAME}!L5:L14`;   // 10명 명단
-const RANGE_20P = `${SHEET_NAME}!L18:L37`;  // 20명 명단
+const RANGE_10P = `${SHEET_NAME}!L5:L14`; // 10명 명단
+const RANGE_20P = `${SHEET_NAME}!L18:L37`; // 20명 명단
 
 // 참가 메시지 ID (채널별)
 const signupMessages = new Map(); // channelId -> messageId
@@ -117,7 +116,9 @@ async function writeRange(range, values) {
 
 async function get10pList() {
   const values = await readRange(RANGE_10P);
-  return values.map((row) => (row[0] || "").trim()).filter(Boolean);
+  return values
+    .map((row) => (row[0] || "").trim())
+    .filter(Boolean);
 }
 
 async function set10pList(names) {
@@ -130,7 +131,9 @@ async function set10pList(names) {
 
 async function get20pList() {
   const values = await readRange(RANGE_20P);
-  return values.map((row) => (row[0] || "").trim()).filter(Boolean);
+  return values
+    .map((row) => (row[0] || "").trim())
+    .filter(Boolean);
 }
 
 async function set20pList(names) {
@@ -203,6 +206,24 @@ async function updateSignupMessage(channelId) {
 }
 
 // ===============================
+// 유틸: 이름 리스트 -> 멤버 멘션 문자열 리스트
+// ===============================
+async function buildMentionsForNames(guild, names) {
+  if (!guild || names.length === 0) return names;
+
+  // 길드 멤버 캐시 채우기
+  const members = await guild.members.fetch().catch(() => null);
+  if (!members) return names;
+
+  return names.map((name) => {
+    const member = members.find(
+      (m) => m.nickname === name || m.user.username === name
+    );
+    return member ? `<@${member.id}>` : name;
+  });
+}
+
+// ===============================
 // 봇 준비 완료
 // ===============================
 client.once("ready", async () => {
@@ -224,6 +245,10 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("re")
       .setDescription("20명 명단을 다시 참가자10 + 대기자로 되돌립니다.")
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName("시작")
+      .setDescription("현재 참가자들에게 멘션을 보내 내전 시작을 알립니다.")
       .toJSON()
   ];
 
@@ -263,6 +288,7 @@ client.on("interactionCreate", async (interaction) => {
       if (!modeMap.has(channelId)) modeMap.set(channelId, "10");
       if (!waitlists.has(channelId)) waitlists.set(channelId, []);
 
+      // /내전모집
       if (commandName === "내전모집") {
         await syncFromSheet(channelId);
 
@@ -279,6 +305,17 @@ client.on("interactionCreate", async (interaction) => {
 
         const text = buildSignupText(channelId);
 
+        // 이전 모집 메시지 있으면 삭제
+        const prevId = signupMessages.get(channelId);
+        if (prevId) {
+          const prevMsg = await interaction.channel.messages
+            .fetch(prevId)
+            .catch(() => null);
+          if (prevMsg) {
+            await prevMsg.delete().catch(() => {});
+          }
+        }
+
         const msg = await interaction.reply({
           content: text,
           components: [row],
@@ -288,6 +325,7 @@ client.on("interactionCreate", async (interaction) => {
         signupMessages.set(channelId, msg.id);
       }
 
+      // /내전멤버
       else if (commandName === "내전멤버") {
         await syncFromSheet(channelId);
 
@@ -306,6 +344,7 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.reply({ content: text, ephemeral: true });
       }
 
+      // /20
       else if (commandName === "20") {
         await acquireLock();
         try {
@@ -344,6 +383,7 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
+      // /re
       else if (commandName === "re") {
         await acquireLock();
         try {
@@ -377,6 +417,35 @@ client.on("interactionCreate", async (interaction) => {
         } finally {
           releaseLock();
         }
+      }
+
+      // /시작
+      else if (commandName === "시작") {
+        await syncFromSheet(channelId);
+
+        const mode = getMode(channelId);
+        const participants = participantsMap.get(channelId) || [];
+
+        if (participants.length === 0) {
+          await interaction.reply({
+            content: "현재 참가자가 없습니다.",
+            ephemeral: true
+          });
+          return;
+        }
+
+        const mentions = await buildMentionsForNames(
+          interaction.guild,
+          participants
+        );
+
+        const text =
+          `${mentions.join(" ")}\n` +
+          "내전 시작합니다! 모두 모여주세요~";
+
+        await interaction.reply({
+          content: text
+        });
       }
     }
 
@@ -489,7 +558,6 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-
 // ===============================
 // 디스코드 봇 로그인
 // ===============================
@@ -506,5 +574,3 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`HTTP server listening on port ${PORT}`);
 });
-
-
