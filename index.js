@@ -62,6 +62,7 @@ const signupMessages = new Map();
 const participantsMap = new Map();
 const waitlists = new Map();
 const modeMap = new Map();
+const messageUpdateLock = new Map();
 
 // ===== Sheet Lock =====
 let sheetLock = false;
@@ -179,27 +180,49 @@ async function buildSignupText(channelId, guild) {
 
 // ===== 모집 메시지 안전 업데이트 =====
 function safeUpdateSignupMessage(channelId) {
-  const msgId = signupMessages.get(channelId);
-  if (!msgId) return;
+  if (!signupMessages.get(channelId)) return;
 
-  client.channels.fetch(channelId)
-    .then(channel => {
-      if (!channel || !channel.isTextBased()) return null;
-      return channel.messages.fetch(msgId)
-        .then(msg => ({ msg, guild: channel.guild }));
-    })
-    .then(async (data) => {
-      if (!data || !data.msg) return;
+  // 이미 이 채널에서 업데이트 중이면, 큐에 넣고 끝
+  if (messageUpdateLock.get(channelId) === true) {
+    messageUpdateLock.set(channelId, "queued");
+    return;
+  }
 
-      const { msg, guild } = data;
-      const newText = await buildSignupText(channelId, guild);
+  // 업데이트 시작
+  messageUpdateLock.set(channelId, true);
 
-      msg.edit({
+  const runUpdate = async () => {
+    try {
+      const msgId = signupMessages.get(channelId);
+      if (!msgId) return;
+
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased()) return;
+
+      const msg = await channel.messages.fetch(msgId).catch(() => null);
+      if (!msg) return;
+
+      const newText = await buildSignupText(channelId, channel.guild);
+
+      await msg.edit({
         content: newText,
         components: msg.components
       }).catch(() => {});
-    })
-    .catch(() => {});
+    } finally {
+      // 업데이트 끝
+      if (messageUpdateLock.get(channelId) === "queued") {
+        // 대기 중인 요청이 있으면 다시 실행
+        messageUpdateLock.set(channelId, true);
+        setTimeout(runUpdate, 50);
+      } else {
+        // 모두 끝났으면 unlock
+        messageUpdateLock.set(channelId, false);
+      }
+    }
+  };
+
+  // 첫 호출 실행
+  runUpdate();
 }
 
 // ===== Commands 등록 =====
@@ -573,4 +596,5 @@ http
     res.end("Bot is running\n");
   })
   .listen(PORT, () => console.log(`HTTP server on ${PORT}`));
+
 
