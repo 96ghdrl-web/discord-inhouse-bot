@@ -505,4 +505,16 @@ http.createServer((req, res) => {
 client.login(BOT_TOKEN);
 // ===============================
 
+// ======================================================
+// 📌 Render 유지용 HTTP Ping Server (UptimeRobot용)
+// ======================================================
 
+const http = require("http");
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Bot is running\n");
+}).listen(PORT, () => {
+  console.log(`HTTP server listening on port ${PORT}`);
+});
