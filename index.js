@@ -246,6 +246,65 @@ client.once("ready", async () => {
   } catch (err) {
     console.error(err);
   }
+
+  // ===============================
+  // 매일 17시(KST) 자동 모집 메시지
+  // ===============================
+  if (CHANNEL_ID) {
+    cron.schedule(
+      "0 17 * * *", // 매일 17:00
+      async () => {
+        try {
+          const channelId = CHANNEL_ID;
+
+          if (!modeMap.has(channelId)) modeMap.set(channelId, "10");
+          if (!waitlists.has(channelId)) waitlists.set(channelId, []);
+
+          await syncFromSheet(channelId);
+
+          const channel = await client.channels
+            .fetch(channelId)
+            .catch(() => null);
+          if (!channel || !channel.isTextBased()) return;
+
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("signup")
+              .setLabel("참가")
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId("cancel")
+              .setLabel("취소")
+              .setStyle(ButtonStyle.Danger)
+          );
+
+          const text = buildSignupText(channelId);
+
+          // 이전 자동/수동 모집 메시지 삭제 후 새로 생성
+          const prevId = signupMessages.get(channelId);
+          if (prevId) {
+            const prev = await channel.messages.fetch(prevId).catch(() => null);
+            if (prev) prev.delete().catch(() => {});
+          }
+
+          const msg = await channel.send({
+            content: text,
+            components: [row]
+          });
+
+          signupMessages.set(channelId, msg.id);
+          console.log("자동 내전모집 메시지 전송 완료");
+        } catch (e) {
+          console.error("자동 내전모집 실패:", e);
+        }
+      },
+      {
+        timezone: "Asia/Seoul"
+      }
+    );
+  } else {
+    console.log("CHANNEL_ID 미설정 - 자동 내전모집 비활성화");
+  }
 });
 
 // ===============================
@@ -281,7 +340,7 @@ client.on("interactionCreate", async (interaction) => {
 
         const text = buildSignupText(channelId);
 
-        // 이전 메시지 삭제
+        // 이전 메시지 삭제 (채널 기준 1개만 유지)
         const prevId = signupMessages.get(channelId);
         if (prevId) {
           const prev = await interaction.channel.messages
@@ -473,6 +532,7 @@ client.on("interactionCreate", async (interaction) => {
           const beforeP = p.length;
           const beforeW = w.length;
 
+          // 일단 취소한 사람 제거
           p = p.filter((n) => n !== userName);
           w = w.filter((n) => n !== userName);
 
@@ -483,15 +543,23 @@ client.on("interactionCreate", async (interaction) => {
             });
           }
 
-          if (mode === "10") await set10pList(p);
-          else await set20pList(p);
+          if (mode === "10") {
+            // 참가자에서 한 자리 비었고 대기자가 있다면, 대기자 -> 참가자로 자동 승급
+            if (p.length < 10 && w.length > 0) {
+              const promoted = w.shift(); // 가장 먼저 대기 등록한 사람
+              if (promoted) p.push(promoted);
+            }
+            await set10pList(p);
+          } else {
+            await set20pList(p);
+          }
 
           participantsMap.set(channelId, p);
           waitlists.set(channelId, w);
 
           await interaction.reply({ content: "취소 완료!", ephemeral: true });
 
-          // 마찬가지로 현재 메시지 직접 수정
+          // 현재 메시지 내용 갱신
           await interaction.message.edit({
             content: buildSignupText(channelId),
             components: interaction.message.components
