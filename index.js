@@ -4,6 +4,7 @@
 // - 20모드: 참가자 20명(시트 L18:L37), 10명 명단 사용 X
 // - /20 : 10모드 상태에서 참가+대기자를 20명 명단으로 옮기고 20모드 진입
 // - /re : 20명 명단을 다시 참가자10 + 대기자로 되돌리고 10모드 복귀
+// - /굴뚝딱가리 : 윤섭 멘션
 // ===============================
 const http = require("http");
 require("dotenv").config();
@@ -186,7 +187,7 @@ async function buildSignupText(channelId, guild) {
   }
 }
 
-// 모집 메시지 내용을 실제 디스코드 메시지에 반영하는 함수 (슬래시 명령어용)
+// 모집 메시지 내용을 실제 디스코드 메시지에 반영하는 함수
 async function updateSignupMessage(channelId) {
   const messageId = signupMessages.get(channelId);
   if (!messageId) return;
@@ -205,7 +206,7 @@ async function updateSignupMessage(channelId) {
   });
 }
 
-// 멘션 변환 (/시작 명령어에서만 사용 – 진짜 알림용)
+// 멘션 변환 (/시작 명령어에서만 사용)
 async function buildMentionsForNames(guild, names) {
   if (!guild || !names || names.length === 0) return names || [];
 
@@ -246,6 +247,10 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("시작")
       .setDescription("현재 참가자들에게 내전 시작 멘션을 보냅니다.")
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName("굴뚝딱가리")
+      .setDescription("윤섭아 너 부른다.")
       .toJSON()
   ];
 
@@ -273,7 +278,7 @@ client.once("ready", async () => {
   // ===============================
   if (CHANNEL_ID) {
     cron.schedule(
-      "0 17 * * *", // 매일 17:00
+      "0 17 * * *",
       async () => {
         try {
           const channelId = CHANNEL_ID;
@@ -301,7 +306,6 @@ client.once("ready", async () => {
 
           const text = await buildSignupText(channelId, channel.guild);
 
-          // 이전 자동/수동 모집 메시지 삭제 후 새로 생성
           const prevId = signupMessages.get(channelId);
           if (prevId) {
             const prev = await channel.messages.fetch(prevId).catch(() => null);
@@ -361,7 +365,6 @@ client.on("interactionCreate", async (interaction) => {
 
         const text = await buildSignupText(channelId, interaction.guild);
 
-        // 이전 메시지 삭제 (채널 기준 1개만 유지)
         const prevId = signupMessages.get(channelId);
         if (prevId) {
           const prev = await interaction.channel.messages
@@ -486,13 +489,40 @@ client.on("interactionCreate", async (interaction) => {
           content: `${mentions.join(" ")}\n내전 시작합니다! 모두 모여주세요~`
         });
       }
+
+      // /굴뚝딱가리
+      else if (commandName === "굴뚝딱가리") {
+        const members = await interaction.guild.members.fetch().catch(() => null);
+        if (!members) {
+          return interaction.reply({
+            content: "길드 멤버 정보를 가져올 수 없습니다.",
+            ephemeral: true
+          });
+        }
+
+        const targetName = "윤섭";
+        const target = members.find(
+          (m) => m.nickname === targetName || m.user.username === targetName
+        );
+
+        if (!target) {
+          return interaction.reply({
+            content: "윤섭을 찾지 못했습니다.",
+            ephemeral: true
+          });
+        }
+
+        return interaction.reply({
+          content: `<@${target.id}> 윤섭아 너 부른다`,
+          ephemeral: false
+        });
+      }
     }
 
     // ===========================
     // 버튼 클릭 처리
     // ===========================
     else if (interaction.isButton()) {
-      // 먼저 빠르게 ACK (3초 제한 회피)
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: "처리 중입니다...",
@@ -505,7 +535,6 @@ client.on("interactionCreate", async (interaction) => {
         await syncFromSheet(channelId);
         const mode = getMode(channelId);
 
-        // 닉네임/유저명 가져오기
         const member = await interaction.guild.members
           .fetch(interaction.user.id)
           .catch(() => null);
@@ -523,7 +552,6 @@ client.on("interactionCreate", async (interaction) => {
         let replyText = "";
         let needUpdateMessage = false;
 
-        // 참가
         if (interaction.customId === "signup") {
           if (p.includes(userName) || w.includes(userName)) {
             replyText = "이미 신청하셨습니다.";
@@ -551,14 +579,10 @@ client.on("interactionCreate", async (interaction) => {
             waitlists.set(channelId, w);
             needUpdateMessage = true;
           }
-        }
-
-        // 취소
-        else if (interaction.customId === "cancel") {
+        } else if (interaction.customId === "cancel") {
           const beforeP = p.length;
           const beforeW = w.length;
 
-          // 일단 취소한 사람 제거
           p = p.filter((n) => n !== userName);
           w = w.filter((n) => n !== userName);
 
@@ -566,7 +590,6 @@ client.on("interactionCreate", async (interaction) => {
             replyText = "신청 기록이 없습니다.";
           } else {
             if (mode === "10") {
-              // 참가자에서 한 자리 비었고 대기자가 있다면, 대기자 -> 참가자로 자동 승급
               if (p.length < 10 && w.length > 0) {
                 const promoted = w.shift();
                 if (promoted) p.push(promoted);
@@ -583,12 +606,10 @@ client.on("interactionCreate", async (interaction) => {
           }
         }
 
-        // 응답 갱신
         if (replyText) {
           await interaction.editReply({ content: replyText });
         }
 
-        // 모집 메시지 내용 갱신
         if (needUpdateMessage) {
           await interaction.message.edit({
             content: await buildSignupText(channelId, interaction.guild),
