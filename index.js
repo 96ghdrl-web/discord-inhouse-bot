@@ -142,25 +142,47 @@ async function syncFromSheet(channelId) {
   }
 }
 
-function buildSignupText(channelId) {
+// ===============================
+// 닉네임/표시 이름 유틸 (영어 username → 서버 닉네임으로 치환)
+// ===============================
+async function buildDisplayNames(guild, names) {
+  if (!guild || !names || names.length === 0) return names || [];
+
+  const members = await guild.members.fetch().catch(() => null);
+  if (!members) return names;
+
+  return names.map((name) => {
+    const m = members.find(
+      (x) => x.nickname === name || x.user.username === name
+    );
+    if (!m) return name; // 혹시 못 찾으면 기존 값 그대로
+    return m.nickname || m.user.username; // 닉네임 우선, 없으면 username
+  });
+}
+
+// 참가/대기자 텍스트 생성 (일반 텍스트 + 닉네임 치환)
+async function buildSignupText(channelId, guild) {
   const mode = getMode(channelId);
   const participants = participantsMap.get(channelId) || [];
   const waits = waitlists.get(channelId) || [];
 
+  const displayParticipants = await buildDisplayNames(guild, participants);
+  const displayWaits = await buildDisplayNames(guild, waits);
+
   if (mode === "10") {
     let text = "📢 오늘 굴뚝 내전 참가하실 분은 아래 버튼을 눌러주세요!\n\n";
     text += `현재 참가자 (${participants.length}명):\n`;
-    text += participants.length ? participants.join(" ") : "없음";
+    text += participants.length ? displayParticipants.join(" ") : "없음";
 
     if (waits.length > 0) {
       text += `\n\n대기자 (${waits.length}명):\n`;
-      text += waits.join(" ");
+      text += displayWaits.join(" ");
     }
     return text;
   } else {
     let text = "📢 20명 내전 모집중! 아래 버튼을 눌러주세요!\n\n";
     text += `현재 참가자 (${participants.length}명):\n`;
-    text += participants.length ? participants.join(" ") : "없음";
+    text += participants.length ? displayParticipants.join(" ") : "없음";
     return text;
   }
 }
@@ -176,7 +198,7 @@ async function updateSignupMessage(channelId) {
   const message = await channel.messages.fetch(messageId).catch(() => null);
   if (!message) return;
 
-  const newContent = buildSignupText(channelId);
+  const newContent = await buildSignupText(channelId, channel.guild);
 
   await message.edit({
     content: newContent,
@@ -184,9 +206,9 @@ async function updateSignupMessage(channelId) {
   });
 }
 
-// 멘션 변환
+// 멘션 변환 (실제 알림이 필요한 /시작 명령어에서만 사용)
 async function buildMentionsForNames(guild, names) {
-  if (!guild || names.length === 0) return names;
+  if (!guild || !names || names.length === 0) return names || [];
 
   const members = await guild.members.fetch().catch(() => null);
   if (!members) return names;
@@ -278,7 +300,7 @@ client.once("ready", async () => {
               .setStyle(ButtonStyle.Danger)
           );
 
-          const text = buildSignupText(channelId);
+          const text = await buildSignupText(channelId, channel.guild);
 
           // 이전 자동/수동 모집 메시지 삭제 후 새로 생성
           const prevId = signupMessages.get(channelId);
@@ -338,7 +360,7 @@ client.on("interactionCreate", async (interaction) => {
             .setStyle(ButtonStyle.Danger)
         );
 
-        const text = buildSignupText(channelId);
+        const text = await buildSignupText(channelId, interaction.guild);
 
         // 이전 메시지 삭제 (채널 기준 1개만 유지)
         const prevId = signupMessages.get(channelId);
@@ -366,11 +388,16 @@ client.on("interactionCreate", async (interaction) => {
         const p = participantsMap.get(channelId) || [];
         const w = waitlists.get(channelId) || [];
 
+        const displayP = await buildDisplayNames(interaction.guild, p);
+        const displayW = await buildDisplayNames(interaction.guild, w);
+
         let text = `현재 모드: ${mode}\n\n`;
-        text += `참가자 (${p.length}명):\n${p.length ? p.join(" ") : "없음"}`;
+        text += `참가자 (${p.length}명):\n${
+          p.length ? displayP.join(" ") : "없음"
+        }`;
 
         if (mode === "10" && w.length)
-          text += `\n\n대기자 (${w.length}명):\n${w.join(" ")}`;
+          text += `\n\n대기자 (${w.length}명):\n${displayW.join(" ")}`;
 
         await interaction.reply({ content: text, ephemeral: true });
       }
@@ -522,7 +549,7 @@ client.on("interactionCreate", async (interaction) => {
 
           // 버튼이 달려있는 이 메시지를 직접 업데이트
           await interaction.message.edit({
-            content: buildSignupText(channelId),
+            content: await buildSignupText(channelId, interaction.guild),
             components: interaction.message.components
           });
         }
@@ -561,7 +588,7 @@ client.on("interactionCreate", async (interaction) => {
 
           // 현재 메시지 내용 갱신
           await interaction.message.edit({
-            content: buildSignupText(channelId),
+            content: await buildSignupText(channelId, interaction.guild),
             components: interaction.message.components
           });
         }
