@@ -155,8 +155,8 @@ async function buildDisplayNames(guild, names) {
     const m = members.find(
       (x) => x.nickname === name || x.user.username === name
     );
-    if (!m) return name; // 혹시 못 찾으면 기존 값 그대로
-    return m.nickname || m.user.username; // 닉네임 우선, 없으면 username
+    if (!m) return name; // 못 찾으면 기존 값
+    return m.nickname || m.user.username; // 닉 우선, 없으면 username
   });
 }
 
@@ -206,7 +206,7 @@ async function updateSignupMessage(channelId) {
   });
 }
 
-// 멘션 변환 (실제 알림이 필요한 /시작 명령어에서만 사용)
+// 멘션 변환 (/시작 명령어에서만 사용 – 진짜 알림용)
 async function buildMentionsForNames(guild, names) {
   if (!guild || !names || names.length === 0) return names || [];
 
@@ -493,6 +493,11 @@ client.on("interactionCreate", async (interaction) => {
     // 버튼 클릭 처리
     // ===========================
     else if (interaction.isButton()) {
+      // 3초 타임아웃 방지: 바로 ACK
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: true });
+      }
+
       await acquireLock();
       try {
         await syncFromSheet(channelId);
@@ -505,9 +510,8 @@ client.on("interactionCreate", async (interaction) => {
 
         const userName = member?.nickname || member?.user.username;
         if (!userName) {
-          await interaction.reply({
-            content: "사용자 정보를 가져올 수 없습니다.",
-            ephemeral: true
+          await interaction.editReply({
+            content: "사용자 정보를 가져올 수 없습니다."
           });
           return;
         }
@@ -518,10 +522,10 @@ client.on("interactionCreate", async (interaction) => {
         // 참가
         if (interaction.customId === "signup") {
           if (p.includes(userName) || w.includes(userName)) {
-            return interaction.reply({
-              content: "이미 신청하셨습니다.",
-              ephemeral: true
+            await interaction.editReply({
+              content: "이미 신청하셨습니다."
             });
+            return;
           }
 
           if (mode === "10") {
@@ -532,11 +536,12 @@ client.on("interactionCreate", async (interaction) => {
               w.push(userName);
             }
           } else {
-            if (p.length >= 20)
-              return interaction.reply({
-                content: "20명이 모두 찼습니다.",
-                ephemeral: true
+            if (p.length >= 20) {
+              await interaction.editReply({
+                content: "20명이 모두 찼습니다."
               });
+              return;
+            }
 
             p.push(userName);
             await set20pList(p);
@@ -545,7 +550,7 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, p);
           waitlists.set(channelId, w);
 
-          await interaction.reply({ content: "신청 완료!", ephemeral: true });
+          await interaction.editReply({ content: "신청 완료!" });
 
           // 버튼이 달려있는 이 메시지를 직접 업데이트
           await interaction.message.edit({
@@ -564,10 +569,10 @@ client.on("interactionCreate", async (interaction) => {
           w = w.filter((n) => n !== userName);
 
           if (beforeP === p.length && beforeW === w.length) {
-            return interaction.reply({
-              content: "신청 기록이 없습니다.",
-              ephemeral: true
+            await interaction.editReply({
+              content: "신청 기록이 없습니다."
             });
+            return;
           }
 
           if (mode === "10") {
@@ -584,7 +589,7 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, p);
           waitlists.set(channelId, w);
 
-          await interaction.reply({ content: "취소 완료!", ephemeral: true });
+          await interaction.editReply({ content: "취소 완료!" });
 
           // 현재 메시지 내용 갱신
           await interaction.message.edit({
@@ -600,16 +605,21 @@ client.on("interactionCreate", async (interaction) => {
     console.error(err);
     if (interaction.isRepliable()) {
       try {
-        if (interaction.replied || interaction.deferred)
+        if (interaction.deferred) {
+          await interaction.editReply({
+            content: "오류가 발생했습니다. 다시 시도해주세요."
+          });
+        } else if (interaction.replied) {
           await interaction.followUp({
             content: "오류가 발생했습니다. 다시 시도해주세요.",
             ephemeral: true
           });
-        else
+        } else {
           await interaction.reply({
             content: "오류가 발생했습니다. 다시 시도해주세요.",
             ephemeral: true
           });
+        }
       } catch (_) {}
     }
   }
