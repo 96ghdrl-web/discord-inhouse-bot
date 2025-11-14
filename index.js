@@ -165,7 +165,7 @@ function buildSignupText(channelId) {
   }
 }
 
-// 모집 메시지 내용을 실제 디스코드 메시지에 반영하는 함수
+// 모집 메시지 내용을 실제 디스코드 메시지에 반영하는 함수 (슬래시 명령어용)
 async function updateSignupMessage(channelId) {
   const messageId = signupMessages.get(channelId);
   if (!messageId) return;
@@ -460,7 +460,12 @@ client.on("interactionCreate", async (interaction) => {
           waitlists.set(channelId, w);
 
           await interaction.reply({ content: "신청 완료!", ephemeral: true });
-          await updateSignupMessage(channelId);
+
+          // 버튼이 달려있는 이 메시지를 직접 업데이트
+          await interaction.message.edit({
+            content: buildSignupText(channelId),
+            components: interaction.message.components
+          });
         }
 
         // 취소
@@ -485,7 +490,12 @@ client.on("interactionCreate", async (interaction) => {
           waitlists.set(channelId, w);
 
           await interaction.reply({ content: "취소 완료!", ephemeral: true });
-          await updateSignupMessage(channelId);
+
+          // 마찬가지로 현재 메시지 직접 수정
+          await interaction.message.edit({
+            content: buildSignupText(channelId),
+            components: interaction.message.components
+          });
         }
       } finally {
         releaseLock();
