@@ -1,10 +1,5 @@
 // ===============================
 // 굴뚝 내전 봇 index.js
-// - 10모드: 참가자 10명(시트 L5:L14) + 대기자(메모리)
-// - 20모드: 참가자 20명(시트 L18:L37), 10명 명단 사용 X
-// - /20 : 10모드 상태에서 참가+대기자를 20명 명단으로 옮기고 20모드 진입
-// - /re : 20명 명단을 다시 참가자10 + 대기자로 되돌리고 10모드 복귀
-// - /굴뚝딱가리 : 윤섭 멘션
 // ===============================
 const http = require("http");
 require("dotenv").config();
@@ -542,12 +537,20 @@ client.on("interactionCreate", async (interaction) => {
     // 버튼 클릭 처리
     // ===========================
     else if (interaction.isButton()) {
-      // 3초 제한 회피: 바로 ACK (원본 메시지만 업데이트, 따로 텍스트 출력 없음)
-      if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferUpdate();
+      // 1) 먼저 3초 안에 무조건 ACK (에러 나면 그냥 포기)
+      try {
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true });
+        }
+      } catch (e) {
+        console.error("deferReply error:", e);
+        return;
       }
 
       await acquireLock();
+      let replyText = "";
+      let needUpdateMessage = false;
+
       try {
         await syncFromSheet(channelId);
         const mode = getMode(channelId);
@@ -558,99 +561,93 @@ client.on("interactionCreate", async (interaction) => {
 
         const userName = getMemberDisplayName(member);
         if (!userName) {
-          await interaction.followUp({
-            content: "사용자 정보를 가져올 수 없습니다.",
-            ephemeral: true
-          });
-          return;
-        }
+          replyText = "사용자 정보를 가져올 수 없습니다.";
+        } else {
+          let p = participantsMap.get(channelId) || [];
+          let w = waitlists.get(channelId) || [];
 
-        let p = participantsMap.get(channelId) || [];
-        let w = waitlists.get(channelId) || [];
-        let replyText = "";
-        let needUpdateMessage = false;
+          if (interaction.customId === "signup") {
+            if (p.includes(userName) || w.includes(userName)) {
+              replyText = "이미 신청하셨습니다.";
+            } else {
+              if (mode === "10") {
+                if (p.length < 10) {
+                  p.push(userName);
+                  await set10pList(p);
+                  replyText = "신청 완료!";
+                } else {
+                  w.push(userName);
+                  replyText = "정원이 꽉 차서 대기자로 등록되었습니다.";
+                }
+              } else {
+                if (p.length >= 20) {
+                  replyText = "20명이 모두 찼습니다.";
+                } else {
+                  p.push(userName);
+                  await set20pList(p);
+                  replyText = "신청 완료!";
+                }
+              }
+              participantsMap.set(channelId, p);
+              waitlists.set(channelId, w);
+              needUpdateMessage = true;
+            }
+          } else if (interaction.customId === "cancel") {
+            const beforeP = p.length;
+            const beforeW = w.length;
 
-        if (interaction.customId === "signup") {
-          if (p.includes(userName) || w.includes(userName)) {
-            replyText = "이미 신청하셨습니다.";
-          } else {
-            if (mode === "10") {
-              if (p.length < 10) {
-                p.push(userName);
+            p = p.filter((n) => n !== userName);
+            w = w.filter((n) => n !== userName);
+
+            if (beforeP === p.length && beforeW === w.length) {
+              replyText = "신청 기록이 없습니다.";
+            } else {
+              if (mode === "10") {
+                if (p.length < 10 && w.length > 0) {
+                  const promoted = w.shift();
+                  if (promoted) p.push(promoted);
+                }
                 await set10pList(p);
-                replyText = "신청 완료!";
               } else {
-                w.push(userName);
-                replyText = "정원이 꽉 차서 대기자로 등록되었습니다.";
-              }
-            } else {
-              if (p.length >= 20) {
-                replyText = "20명이 모두 찼습니다.";
-              } else {
-                p.push(userName);
                 await set20pList(p);
-                replyText = "신청 완료!";
               }
+              participantsMap.set(channelId, p);
+              waitlists.set(channelId, w);
+              replyText = "취소 완료!";
+              needUpdateMessage = true;
             }
-
-            participantsMap.set(channelId, p);
-            waitlists.set(channelId, w);
-            needUpdateMessage = true;
           }
-        } else if (interaction.customId === "cancel") {
-          const beforeP = p.length;
-          const beforeW = w.length;
-
-          p = p.filter((n) => n !== userName);
-          w = w.filter((n) => n !== userName);
-
-          if (beforeP === p.length && beforeW === w.length) {
-            replyText = "신청 기록이 없습니다.";
-          } else {
-            if (mode === "10") {
-              if (p.length < 10 && w.length > 0) {
-                const promoted = w.shift();
-                if (promoted) p.push(promoted);
-              }
-              await set10pList(p);
-            } else {
-              await set20pList(p);
-            }
-
-            participantsMap.set(channelId, p);
-            waitlists.set(channelId, w);
-            replyText = "취소 완료!";
-            needUpdateMessage = true;
-          }
-        }
-
-        if (needUpdateMessage) {
-          await interaction.message.edit({
-            content: await buildSignupText(channelId, interaction.guild),
-            components: interaction.message.components
-          });
-        }
-
-        if (replyText) {
-          await interaction.followUp({
-            content: replyText,
-            ephemeral: true
-          });
         }
       } finally {
         releaseLock();
       }
+
+      // 참가/대기자 메시지 갱신
+      if (needUpdateMessage) {
+        try {
+          await interaction.message.edit({
+            content: await buildSignupText(channelId, interaction.guild),
+            components: interaction.message.components
+          });
+        } catch (e) {
+          console.error("message.edit error:", e);
+        }
+      }
+
+      // 에페메랄 응답 갱신
+      try {
+        await interaction.editReply({
+          content: replyText || "알 수 없는 오류가 발생했습니다."
+        });
+      } catch (e) {
+        console.error("editReply error:", e);
+      }
     }
   } catch (err) {
-    console.error(err);
-    // 버튼 쪽은 이미 deferUpdate() 했기 때문에 followUp만 시도
-    try {
-      if (interaction.isButton()) {
-        await interaction.followUp({
-          content: "오류가 발생했습니다. 다시 시도해주세요.",
-          ephemeral: true
-        });
-      } else if (interaction.isRepliable()) {
+    console.error("interactionCreate error:", err);
+    // 버튼은 위에서 이미 deferReply 했으므로 여기선 건드리지 않음
+    if (interaction.isChatInputCommand() && interaction.isRepliable()) {
+      try {
         if (interaction.replied || interaction.deferred) {
           await interaction.editReply({
             content: "오류가 발생했습니다. 다시 시도해주세요."
@@ -661,8 +658,8 @@ client.on("interactionCreate", async (interaction) => {
             ephemeral: true
           });
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
   }
 });
 
