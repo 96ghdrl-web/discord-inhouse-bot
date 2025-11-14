@@ -178,26 +178,28 @@ async function buildSignupText(channelId, guild) {
 }
 
 // ===== 모집 메시지 안전 업데이트 =====
-async function safeUpdateSignupMessage(channelId) {
-  try {
-    const msgId = signupMessages.get(channelId);
-    if (!msgId) return;
+function safeUpdateSignupMessage(channelId) {
+  const msgId = signupMessages.get(channelId);
+  if (!msgId) return;
 
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) return;
+  client.channels.fetch(channelId)
+    .then(channel => {
+      if (!channel || !channel.isTextBased()) return null;
+      return channel.messages.fetch(msgId)
+        .then(msg => ({ msg, guild: channel.guild }));
+    })
+    .then(async (data) => {
+      if (!data || !data.msg) return;
 
-    const msg = await channel.messages.fetch(msgId).catch(() => null);
-    if (!msg) return;
+      const { msg, guild } = data;
+      const newText = await buildSignupText(channelId, guild);
 
-    const newText = await buildSignupText(channelId, channel.guild);
-
-    await msg.edit({
-      content: newText,
-      components: msg.components || []
-    }).catch(() => {});
-  } catch (e) {
-    console.error("safeUpdateSignupMessage error:", e);
-  }
+      msg.edit({
+        content: newText,
+        components: msg.components
+      }).catch(() => {});
+    })
+    .catch(() => {});
 }
 
 // ===== Commands 등록 =====
@@ -318,7 +320,7 @@ client.on("interactionCreate", async (interaction) => {
           waitlists.set(channelId, []);
 
           await interaction.reply({ content: "20모드로 전환되었습니다!", ephemeral: true });
-          await safeUpdateSignupMessage(channelId);
+          setTimeout(() => safeUpdateSignupMessage(channelId), 300);
         } finally {
           releaseLock();
         }
@@ -571,3 +573,4 @@ http
     res.end("Bot is running\n");
   })
   .listen(PORT, () => console.log(`HTTP server on ${PORT}`));
+
