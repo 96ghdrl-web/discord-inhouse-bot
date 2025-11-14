@@ -165,7 +165,7 @@ function buildSignupText(channelId) {
   }
 }
 
-// ✅ 참가 메시지 갱신 함수 (에러 나던 부분 여기 추가)
+// 모집 메시지 내용을 실제 디스코드 메시지에 반영하는 함수
 async function updateSignupMessage(channelId) {
   const messageId = signupMessages.get(channelId);
   if (!messageId) return;
@@ -338,7 +338,7 @@ client.on("interactionCreate", async (interaction) => {
 
           modeMap.set(channelId, "20");
           participantsMap.set(channelId, merged);
-          waitlists.set(channelId, [];
+          waitlists.set(channelId, []);
 
           await interaction.reply({
             content: "20모드로 전환했습니다!",
@@ -398,8 +398,7 @@ client.on("interactionCreate", async (interaction) => {
         const mentions = await buildMentionsForNames(interaction.guild, p);
 
         await interaction.reply({
-          content:
-            `${mentions.join(" ")}\n내전 시작합니다! 모두 모여주세요~`
+          content: `${mentions.join(" ")}\n내전 시작합니다! 모두 모여주세요~`
         });
       }
     }
