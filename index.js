@@ -195,11 +195,17 @@ client.once("ready", async () => {
       .setName("내전멤버")
       .setDescription("현재 내전 참가자/대기자를 확인합니다.")
       .toJSON(),
-    new SlashCommandBuilder().setName("20").toJSON(),
-    new SlashCommandBuilder().setName("re").toJSON(),
+    new SlashCommandBuilder()
+      .setName("20")
+      .setDescription("현재 참가자/대기자를 20명 모드로 전환합니다.")
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName("re")
+      .setDescription("20명 모드에서 다시 10명+대기자 모드로 되돌립니다.")
+      .toJSON(),
     new SlashCommandBuilder()
       .setName("시작")
-      .setDescription("현재 참가자들에게 멘션을 보냅니다.")
+      .setDescription("현재 참가자들에게 내전 시작 멘션을 보냅니다.")
       .toJSON()
   ];
 
@@ -494,5 +500,6 @@ http
     res.end("Bot is running\n");
   })
   .listen(PORT, () => console.log(`HTTP server on ${PORT}`));
+
 
 
