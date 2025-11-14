@@ -80,6 +80,15 @@ function releaseLock() {
 }
 
 // ===============================
+// 공통 유틸: 표시 이름 우선순위
+// 서버 닉네임 > Display Name(globalName) > username
+// ===============================
+function getMemberDisplayName(member) {
+  if (!member) return null;
+  return member.nickname || member.user.globalName || member.user.username;
+}
+
+// ===============================
 // 시트 유틸
 // ===============================
 async function readRange(range) {
@@ -143,7 +152,8 @@ async function syncFromSheet(channelId) {
 }
 
 // ===============================
-// 닉네임/표시 이름 유틸 (영어 username → 서버 닉네임으로 치환)
+// 닉네임/표시 이름 유틸
+// (저장된 문자열을 서버 닉/DisplayName/username 중 현재 값으로 치환)
 // ===============================
 async function buildDisplayNames(guild, names) {
   if (!guild || !names || names.length === 0) return names || [];
@@ -153,10 +163,13 @@ async function buildDisplayNames(guild, names) {
 
   return names.map((name) => {
     const m = members.find(
-      (x) => x.nickname === name || x.user.username === name
+      (x) =>
+        x.nickname === name ||
+        x.user.globalName === name ||
+        x.user.username === name
     );
-    if (!m) return name; // 못 찾으면 기존 값
-    return m.nickname || m.user.username; // 닉 우선, 없으면 username
+    if (!m) return name;
+    return getMemberDisplayName(m);
   });
 }
 
@@ -206,7 +219,7 @@ async function updateSignupMessage(channelId) {
   });
 }
 
-// 멘션 변환 (/시작 명령어에서만 사용)
+// 멘션 변환 (/시작 명령어에서만 사용 – 진짜 알림용)
 async function buildMentionsForNames(guild, names) {
   if (!guild || !names || names.length === 0) return names || [];
 
@@ -215,7 +228,10 @@ async function buildMentionsForNames(guild, names) {
 
   return names.map((name) => {
     const m = members.find(
-      (x) => x.nickname === name || x.user.username === name
+      (x) =>
+        x.nickname === name ||
+        x.user.globalName === name ||
+        x.user.username === name
     );
     return m ? `<@${m.id}>` : name;
   });
@@ -502,7 +518,10 @@ client.on("interactionCreate", async (interaction) => {
 
         const targetName = "윤섭";
         const target = members.find(
-          (m) => m.nickname === targetName || m.user.username === targetName
+          (m) =>
+            m.nickname === targetName ||
+            m.user.globalName === targetName ||
+            m.user.username === targetName
         );
 
         if (!target) {
@@ -523,6 +542,7 @@ client.on("interactionCreate", async (interaction) => {
     // 버튼 클릭 처리
     // ===========================
     else if (interaction.isButton()) {
+      // 3초 제한 회피용 빠른 ACK
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: "처리 중입니다...",
@@ -539,7 +559,7 @@ client.on("interactionCreate", async (interaction) => {
           .fetch(interaction.user.id)
           .catch(() => null);
 
-        const userName = member?.nickname || member?.user.username;
+        const userName = getMemberDisplayName(member);
         if (!userName) {
           await interaction.editReply({
             content: "사용자 정보를 가져올 수 없습니다."
