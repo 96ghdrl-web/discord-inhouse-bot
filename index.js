@@ -1,6 +1,7 @@
 // ===============================
-// 굴뚝 내전 봇 index.js (완전 안정화 버전)
+// 굴뚝 내전 봇 index.js — 안정화 최종 버전
 // ===============================
+
 const http = require("http");
 require("dotenv").config();
 
@@ -19,13 +20,17 @@ const { google } = require("googleapis");
 const cron = require("node-cron");
 const config = require("./config.json");
 
-// 환경변수 우선, 없으면 config.json 값
+// ===============================
+// 환경 변수 / 기본 설정
+// ===============================
 const BOT_TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID || config.SHEET_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID || config.CHANNEL_ID;
 const GUILD_ID = process.env.GUILD_ID || config.GUILD_ID;
 
-// ===== Discord Client =====
+// ===============================
+// Discord Client
+// ===============================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -35,7 +40,9 @@ const client = new Client({
   ]
 });
 
-// ===== Google Sheets =====
+// ===============================
+// Google Sheets
+// ===============================
 let googleAuthOptions;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   googleAuthOptions = {
@@ -52,33 +59,38 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
 const auth = new google.auth.GoogleAuth(googleAuthOptions);
 const sheets = google.sheets({ version: "v4", auth });
 
-// 시트 영역
 const SHEET_NAME = "대진표";
 const RANGE_10P = `${SHEET_NAME}!L5:L14`;
 const RANGE_20P = `${SHEET_NAME}!L18:L37`;
 
-// 저장용 Map들
+// ===============================
+// 데이터 저장소
+// ===============================
 const signupMessages = new Map();
 const participantsMap = new Map();
 const waitlists = new Map();
 const modeMap = new Map();
+
+// 메시지 업데이트 충돌 방지용 Lock
 const messageUpdateLock = new Map();
 
-// ===== Sheet Lock =====
+// Sheet Lock
 let sheetLock = false;
+
+// ===============================
+// Lock 유틸
+// ===============================
 async function acquireLock() {
   while (sheetLock) await new Promise(res => setTimeout(res, 20));
   sheetLock = true;
 }
-function releaseLock() { sheetLock = false; }
-
-// ===== Display Name =====
-function getMemberDisplayName(member) {
-  if (!member) return null;
-  return member.nickname || member.user.globalName || member.user.username;
+function releaseLock() {
+  sheetLock = false;
 }
 
-// ===== Sheets I/O =====
+// ===============================
+// Sheets I/O
+// ===============================
 async function readRange(range) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -120,7 +132,9 @@ async function set20pList(list) {
   await writeRange(RANGE_20P, rows);
 }
 
-// ===== Mode =====
+// ===============================
+// 모드 & 참가 정보 동기화
+// ===============================
 function getMode(channelId) {
   return modeMap.get(channelId) || "10";
 }
@@ -139,7 +153,14 @@ async function syncFromSheet(channelId) {
   }
 }
 
-// ===== Display Name 변환 =====
+// ===============================
+// 이름 처리
+// ===============================
+function getMemberDisplayName(member) {
+  if (!member) return null;
+  return member.nickname || member.user.globalName || member.user.username;
+}
+
 async function buildDisplayNames(guild, names) {
   if (!guild || !names || !names.length) return names || [];
   const members = await guild.members.fetch().catch(() => null);
@@ -156,7 +177,9 @@ async function buildDisplayNames(guild, names) {
   });
 }
 
-// ===== Signup 메시지 텍스트 생성 =====
+// ===============================
+// 텍스트 생성
+// ===============================
 async function buildSignupText(channelId, guild) {
   const mode = getMode(channelId);
   const p = participantsMap.get(channelId) || [];
@@ -166,29 +189,30 @@ async function buildSignupText(channelId, guild) {
   const dw = await buildDisplayNames(guild, w);
 
   if (mode === "10") {
-    let t = "📢 오늘 굴뚝 내전 참가자 모집!\n\n";
-    t += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
+    let text = "📢 오늘 굴뚝 내전 참가자 모집!\n\n";
+    text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
     if (w.length)
-      t += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
-    return t;
+      text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
+    return text;
   }
 
-  let t = "📢 20명 내전 모집!\n\n";
-  t += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
-  return t;
+  let text = "📢 20명 내전 모집!\n\n";
+  text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
+  return text;
 }
 
-// ===== 모집 메시지 안전 업데이트 =====
+// ===============================
+// 메시지 업데이트 (충돌 방지 완전 안정 버전)
+// ===============================
 function safeUpdateSignupMessage(channelId) {
   if (!signupMessages.get(channelId)) return;
 
-  // 이미 이 채널에서 업데이트 중이면, 큐에 넣고 끝
+  // 이미 업데이트 중 → queued 처리
   if (messageUpdateLock.get(channelId) === true) {
     messageUpdateLock.set(channelId, "queued");
     return;
   }
 
-  // 업데이트 시작
   messageUpdateLock.set(channelId, true);
 
   const runUpdate = async () => {
@@ -208,33 +232,32 @@ function safeUpdateSignupMessage(channelId) {
         content: newText,
         components: msg.components
       }).catch(() => {});
+
     } finally {
-      // 업데이트 끝
       if (messageUpdateLock.get(channelId) === "queued") {
-        // 대기 중인 요청이 있으면 다시 실행
         messageUpdateLock.set(channelId, true);
         setTimeout(runUpdate, 50);
       } else {
-        // 모두 끝났으면 unlock
         messageUpdateLock.set(channelId, false);
       }
     }
   };
 
-  // 첫 호출 실행
   runUpdate();
 }
 
-// ===== Commands 등록 =====
+// ===============================
+// Ready
+// ===============================
 client.once("ready", async () => {
   console.log(`로그인 성공: ${client.user.tag}`);
 
   const commands = [
     new SlashCommandBuilder().setName("내전모집").setDescription("내전 참가 버튼 메시지 생성"),
     new SlashCommandBuilder().setName("내전멤버").setDescription("현재 참가자 확인"),
-    new SlashCommandBuilder().setName("20").setDescription("20모드로 전환"),
-    new SlashCommandBuilder().setName("re").setDescription("10모드로 복귀"),
-    new SlashCommandBuilder().setName("시작").setDescription("참가자 전원 호출"),
+    new SlashCommandBuilder().setName("20").setDescription("20인 모드로 전환"),
+    new SlashCommandBuilder().setName("re").setDescription("10인 모드로 전환"),
+    new SlashCommandBuilder().setName("시작").setDescription("참가자 소집"),
     new SlashCommandBuilder().setName("굴뚝딱가리").setDescription("윤섭 호출")
   ].map(c => c.toJSON());
 
@@ -250,22 +273,22 @@ client.once("ready", async () => {
       await rest.put(Routes.applicationCommands(client.user.id), {
         body: commands
       });
-      console.log("글로벌 명령어 등록");
     }
   } catch (e) {
     console.error(e);
   }
 });
+
 // ===============================
-// Slash Commands 처리
+// interactionCreate
 // ===============================
 client.on("interactionCreate", async (interaction) => {
   const channelId = interaction.channelId;
 
   try {
-    // ======================================
-    // 1) Slash Commands
-    // ======================================
+    // ------------------------------
+    // Slash Commands
+    // ------------------------------
     if (interaction.isChatInputCommand()) {
       const { commandName } = interaction;
 
@@ -277,19 +300,12 @@ client.on("interactionCreate", async (interaction) => {
         await syncFromSheet(channelId);
 
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("signup")
-            .setLabel("참가")
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId("cancel")
-            .setLabel("취소")
-            .setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId("signup").setLabel("참가").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId("cancel").setLabel("취소").setStyle(ButtonStyle.Danger)
         );
 
         const text = await buildSignupText(channelId, interaction.guild);
 
-        // 기존 메시지 삭제
         const prevId = signupMessages.get(channelId);
         if (prevId) {
           const prev = await interaction.channel.messages.fetch(prevId).catch(() => null);
@@ -308,16 +324,18 @@ client.on("interactionCreate", async (interaction) => {
       // /내전멤버
       else if (commandName === "내전멤버") {
         await syncFromSheet(channelId);
-
         const mode = getMode(channelId);
+
         const p = participantsMap.get(channelId) || [];
         const w = waitlists.get(channelId) || [];
 
         const dp = await buildDisplayNames(interaction.guild, p);
         const dw = await buildDisplayNames(interaction.guild, w);
 
-        let t = `현재 모드: ${mode}\n\n참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
-        if (mode === "10" && w.length) t += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
+        let t = `현재 모드: ${mode}\n\n`;
+        t += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
+        if (mode === "10" && w.length)
+          t += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
 
         await interaction.reply({ content: t, ephemeral: true });
       }
@@ -326,13 +344,13 @@ client.on("interactionCreate", async (interaction) => {
       else if (commandName === "20") {
         await acquireLock();
         try {
-          if (getMode(channelId) === "20") {
+          if (getMode(channelId) === "20")
             return interaction.reply({ content: "이미 20모드입니다.", ephemeral: true });
-          }
 
           await syncFromSheet(channelId);
           const p = participantsMap.get(channelId) || [];
           const w = waitlists.get(channelId) || [];
+
           const merged = [...p, ...w].slice(0, 20);
 
           await set20pList(merged);
@@ -343,7 +361,7 @@ client.on("interactionCreate", async (interaction) => {
           waitlists.set(channelId, []);
 
           await interaction.reply({ content: "20모드로 전환되었습니다!", ephemeral: true });
-          setTimeout(() => safeUpdateSignupMessage(channelId), 300);
+          setTimeout(() => safeUpdateSignupMessage(channelId), 200);
         } finally {
           releaseLock();
         }
@@ -353,9 +371,8 @@ client.on("interactionCreate", async (interaction) => {
       else if (commandName === "re") {
         await acquireLock();
         try {
-          if (getMode(channelId) === "10") {
+          if (getMode(channelId) === "10")
             return interaction.reply({ content: "이미 10모드입니다.", ephemeral: true });
-          }
 
           const list20 = await get20pList();
           const p10 = list20.slice(0, 10);
@@ -368,8 +385,8 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, p10);
           waitlists.set(channelId, w);
 
-          await interaction.reply({ content: "10모드로 복귀했습니다!", ephemeral: true });
-          await safeUpdateSignupMessage(channelId);
+          await interaction.reply({ content: "10모드로 전환되었습니다!", ephemeral: true });
+          setTimeout(() => safeUpdateSignupMessage(channelId), 200);
         } finally {
           releaseLock();
         }
@@ -384,9 +401,9 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "현재 참가자가 없습니다.", ephemeral: true });
         }
 
-        const members = await buildDisplayNames(interaction.guild, p);
+        const dp = await buildDisplayNames(interaction.guild, p);
         await interaction.reply({
-          content: `${members.join(" ")}\n내전 시작합니다! 모두 준비해주세요!`
+          content: `${dp.join(" ")}\n내전 시작합니다!`
         });
       }
 
@@ -394,7 +411,7 @@ client.on("interactionCreate", async (interaction) => {
       else if (commandName === "굴뚝딱가리") {
         const members = await interaction.guild.members.fetch().catch(() => null);
         if (!members) {
-          return interaction.reply({ content: "멤버 목록 정보를 가져올 수 없습니다.", ephemeral: true });
+          return interaction.reply({ content: "멤버 정보를 불러올 수 없습니다.", ephemeral: true });
         }
 
         const target = members.find(
@@ -415,18 +432,15 @@ client.on("interactionCreate", async (interaction) => {
       }
     }
 
-    // ======================================
-    // 2) 버튼 처리 — ★완전히 새로 작성한 안정화 버전★
-    // ======================================
+    // ------------------------------
+    // Button (참가/취소)
+    // ------------------------------
     else if (interaction.isButton()) {
-
-      // ❗ 버튼 클릭 즉시 3초 제한 안에 무조건 ACK 보냄
       try {
         if (!interaction.replied && !interaction.deferred) {
           await interaction.deferReply({ ephemeral: true });
         }
-      } catch (e) {
-        console.error("deferReply 실패:", e);
+      } catch {
         return;
       }
 
@@ -439,15 +453,15 @@ client.on("interactionCreate", async (interaction) => {
 
         const mode = getMode(channelId);
         const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-
         const userName = getMemberDisplayName(member);
+
         if (!userName) {
-          replyText = "유저 정보를 가져올 수 없습니다.";
+          replyText = "사용자 정보를 불러올 수 없습니다.";
         } else {
           let p = participantsMap.get(channelId) || [];
           let w = waitlists.get(channelId) || [];
 
-          // 👉 참가 버튼
+          // 참가
           if (interaction.customId === "signup") {
             if (p.includes(userName) || w.includes(userName)) {
               replyText = "이미 신청한 상태입니다.";
@@ -456,28 +470,27 @@ client.on("interactionCreate", async (interaction) => {
                 if (p.length < 10) {
                   p.push(userName);
                   await set10pList(p);
-                  replyText = "참가 신청이 완료되었습니다!";
+                  replyText = "참가 완료!";
                 } else {
                   w.push(userName);
-                  replyText = "정원이 차서 대기자로 등록되었습니다.";
+                  replyText = "정원 초과로 대기자로 등록되었습니다.";
                 }
               } else {
                 if (p.length >= 20) {
-                  replyText = "20명 정원이 가득찼습니다.";
+                  replyText = "20명 정원이 가득 찼습니다.";
                 } else {
                   p.push(userName);
                   await set20pList(p);
-                  replyText = "참가 신청 완료!";
+                  replyText = "참가 완료!";
                 }
               }
-
               participantsMap.set(channelId, p);
               waitlists.set(channelId, w);
               needUpdate = true;
             }
           }
 
-          // 👉 취소 버튼
+          // 취소
           else if (interaction.customId === "cancel") {
             const oldP = p.length;
             const oldW = w.length;
@@ -485,8 +498,8 @@ client.on("interactionCreate", async (interaction) => {
             p = p.filter(n => n !== userName);
             w = w.filter(n => n !== userName);
 
-            if (oldP === p.length && oldW === w.length) {
-              replyText = "기록된 신청이 없습니다.";
+            if (p.length === oldP && w.length === oldW) {
+              replyText = "신청 기록이 없습니다.";
             } else {
               if (mode === "10") {
                 if (p.length < 10 && w.length > 0) {
@@ -509,26 +522,24 @@ client.on("interactionCreate", async (interaction) => {
         releaseLock();
       }
 
-      // 참가/대기자 메시지 자동 업데이트
       if (needUpdate) {
-        setTimeout(() => safeUpdateSignupMessage(channelId), 200);
+        safeUpdateSignupMessage(channelId);
       }
 
-      // 유저에게 에페메랄 응답
       try {
         await interaction.editReply({
           content: replyText || "처리 중 오류가 발생했습니다."
         });
-      } catch (e) {
-        console.error("editReply 실패:", e);
-      }
+      } catch {}
     }
-  } catch (err) {
-    console.error("interactionCreate 전체 오류:", err);
+
+  } catch (e) {
+    console.error("interactionCreate error:", e);
   }
 });
+
 // ===============================
-// 매일 17시 자동 모집 메시지
+// 자동 모집 (매일 17시)
 // ===============================
 cron.schedule(
   "0 17 * * *",
@@ -546,19 +557,12 @@ cron.schedule(
       if (!channel || !channel.isTextBased()) return;
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("signup")
-          .setLabel("참가")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("cancel")
-          .setLabel("취소")
-          .setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId("signup").setLabel("참가").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("cancel").setLabel("취소").setStyle(ButtonStyle.Danger)
       );
 
       const text = await buildSignupText(channelId, channel.guild);
 
-      // 기존 자동 생성 메시지 삭제
       const prevId = signupMessages.get(channelId);
       if (prevId) {
         const prev = await channel.messages.fetch(prevId).catch(() => null);
@@ -572,9 +576,8 @@ cron.schedule(
 
       signupMessages.set(channelId, msg.id);
 
-      console.log("자동 내전모집 메시지 전송 완료");
     } catch (e) {
-      console.error("자동 내전모집 실패:", e);
+      console.error("자동 모집 실패:", e);
     }
   },
   { timezone: "Asia/Seoul" }
@@ -586,15 +589,13 @@ cron.schedule(
 client.login(BOT_TOKEN);
 
 // ===============================
-// UptimeRobot / Render Ping용 HTTP 서버
+// HTTP Server (Render Ping)
 // ===============================
 const PORT = process.env.PORT || 3000;
-
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("Bot is running\n");
   })
   .listen(PORT, () => console.log(`HTTP server on ${PORT}`));
-
 
