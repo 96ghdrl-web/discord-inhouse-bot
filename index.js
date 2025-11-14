@@ -165,6 +165,25 @@ function buildSignupText(channelId) {
   }
 }
 
+// ✅ 참가 메시지 갱신 함수 (에러 나던 부분 여기 추가)
+async function updateSignupMessage(channelId) {
+  const messageId = signupMessages.get(channelId);
+  if (!messageId) return;
+
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return;
+
+  const newContent = buildSignupText(channelId);
+
+  await message.edit({
+    content: newContent,
+    components: message.components || []
+  });
+}
+
 // 멘션 변환
 async function buildMentionsForNames(guild, names) {
   if (!guild || names.length === 0) return names;
@@ -319,7 +338,7 @@ client.on("interactionCreate", async (interaction) => {
 
           modeMap.set(channelId, "20");
           participantsMap.set(channelId, merged);
-          waitlists.set(channelId, []);
+          waitlists.set(channelId, [];
 
           await interaction.reply({
             content: "20모드로 전환했습니다!",
@@ -394,14 +413,19 @@ client.on("interactionCreate", async (interaction) => {
         await syncFromSheet(channelId);
         const mode = getMode(channelId);
 
-        // ===============================
-        // ⚠ 여기서 닉네임 강제 fetch (핵심 수정)
-        // ===============================
+        // 닉네임/유저명 가져오기
         const member = await interaction.guild.members
           .fetch(interaction.user.id)
           .catch(() => null);
 
         const userName = member?.nickname || member?.user.username;
+        if (!userName) {
+          await interaction.reply({
+            content: "사용자 정보를 가져올 수 없습니다.",
+            ephemeral: true
+          });
+          return;
+        }
 
         let p = participantsMap.get(channelId) || [];
         let w = waitlists.get(channelId) || [];
@@ -500,6 +524,3 @@ http
     res.end("Bot is running\n");
   })
   .listen(PORT, () => console.log(`HTTP server on ${PORT}`));
-
-
-
