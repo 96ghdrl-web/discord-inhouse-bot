@@ -542,12 +542,9 @@ client.on("interactionCreate", async (interaction) => {
     // 버튼 클릭 처리
     // ===========================
     else if (interaction.isButton()) {
-      // 3초 제한 회피용 빠른 ACK
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: "처리 중입니다...",
-          ephemeral: true
-        });
+      // 3초 제한 회피: 바로 ACK (원본 메시지만 업데이트, 따로 텍스트 출력 없음)
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate();
       }
 
       await acquireLock();
@@ -561,8 +558,9 @@ client.on("interactionCreate", async (interaction) => {
 
         const userName = getMemberDisplayName(member);
         if (!userName) {
-          await interaction.editReply({
-            content: "사용자 정보를 가져올 수 없습니다."
+          await interaction.followUp({
+            content: "사용자 정보를 가져올 수 없습니다.",
+            ephemeral: true
           });
           return;
         }
@@ -626,14 +624,17 @@ client.on("interactionCreate", async (interaction) => {
           }
         }
 
-        if (replyText) {
-          await interaction.editReply({ content: replyText });
-        }
-
         if (needUpdateMessage) {
           await interaction.message.edit({
             content: await buildSignupText(channelId, interaction.guild),
             components: interaction.message.components
+          });
+        }
+
+        if (replyText) {
+          await interaction.followUp({
+            content: replyText,
+            ephemeral: true
           });
         }
       } finally {
@@ -642,8 +643,14 @@ client.on("interactionCreate", async (interaction) => {
     }
   } catch (err) {
     console.error(err);
-    if (interaction.isRepliable()) {
-      try {
+    // 버튼 쪽은 이미 deferUpdate() 했기 때문에 followUp만 시도
+    try {
+      if (interaction.isButton()) {
+        await interaction.followUp({
+          content: "오류가 발생했습니다. 다시 시도해주세요.",
+          ephemeral: true
+        });
+      } else if (interaction.isRepliable()) {
         if (interaction.replied || interaction.deferred) {
           await interaction.editReply({
             content: "오류가 발생했습니다. 다시 시도해주세요."
@@ -654,8 +661,8 @@ client.on("interactionCreate", async (interaction) => {
             ephemeral: true
           });
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
   }
 });
 
