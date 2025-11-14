@@ -489,27 +489,15 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// ===============================
-// Render 무료 Web Service용 더미 HTTP 서버
-// ===============================
-const PORT = process.env.PORT || 3000;
 
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Bot is running\n");
-}).listen(PORT, () => {
-  console.log(`HTTP server listening on port ${PORT}`);
-});
-
+// ===============================
 // 디스코드 봇 로그인
-client.login(BOT_TOKEN);
 // ===============================
+client.login(BOT_TOKEN);
 
-// ======================================================
-// 📌 Render 유지용 HTTP Ping Server (UptimeRobot용)
-// ======================================================
-
-const http = require("http");
+// ===============================
+// Render 유지용 HTTP Ping Server (UptimeRobot용)
+// ===============================
 const PORT = process.env.PORT || 3000;
 
 http.createServer((req, res) => {
@@ -518,3 +506,5 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`HTTP server listening on port ${PORT}`);
 });
+
+
