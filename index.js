@@ -5,7 +5,6 @@
 // - /20 : 10모드 상태에서 참가+대기자를 20명 명단으로 옮기고 20모드 진입
 // - /re : 20명 명단을 다시 참가자10 + 대기자로 되돌리고 10모드 복귀
 // ===============================
-const fs = require("fs");
 const http = require("http");
 require("dotenv").config();
 
@@ -493,9 +492,12 @@ client.on("interactionCreate", async (interaction) => {
     // 버튼 클릭 처리
     // ===========================
     else if (interaction.isButton()) {
-      // 3초 타임아웃 방지: 바로 ACK
-      if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ ephemeral: true });
+      // 먼저 빠르게 ACK (3초 제한 회피)
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: "처리 중입니다...",
+          ephemeral: true
+        });
       }
 
       await acquireLock();
@@ -518,45 +520,37 @@ client.on("interactionCreate", async (interaction) => {
 
         let p = participantsMap.get(channelId) || [];
         let w = waitlists.get(channelId) || [];
+        let replyText = "";
+        let needUpdateMessage = false;
 
         // 참가
         if (interaction.customId === "signup") {
           if (p.includes(userName) || w.includes(userName)) {
-            await interaction.editReply({
-              content: "이미 신청하셨습니다."
-            });
-            return;
-          }
-
-          if (mode === "10") {
-            if (p.length < 10) {
-              p.push(userName);
-              await set10pList(p);
-            } else {
-              w.push(userName);
-            }
+            replyText = "이미 신청하셨습니다.";
           } else {
-            if (p.length >= 20) {
-              await interaction.editReply({
-                content: "20명이 모두 찼습니다."
-              });
-              return;
+            if (mode === "10") {
+              if (p.length < 10) {
+                p.push(userName);
+                await set10pList(p);
+                replyText = "신청 완료!";
+              } else {
+                w.push(userName);
+                replyText = "정원이 꽉 차서 대기자로 등록되었습니다.";
+              }
+            } else {
+              if (p.length >= 20) {
+                replyText = "20명이 모두 찼습니다.";
+              } else {
+                p.push(userName);
+                await set20pList(p);
+                replyText = "신청 완료!";
+              }
             }
 
-            p.push(userName);
-            await set20pList(p);
+            participantsMap.set(channelId, p);
+            waitlists.set(channelId, w);
+            needUpdateMessage = true;
           }
-
-          participantsMap.set(channelId, p);
-          waitlists.set(channelId, w);
-
-          await interaction.editReply({ content: "신청 완료!" });
-
-          // 버튼이 달려있는 이 메시지를 직접 업데이트
-          await interaction.message.edit({
-            content: await buildSignupText(channelId, interaction.guild),
-            components: interaction.message.components
-          });
         }
 
         // 취소
@@ -569,29 +563,33 @@ client.on("interactionCreate", async (interaction) => {
           w = w.filter((n) => n !== userName);
 
           if (beforeP === p.length && beforeW === w.length) {
-            await interaction.editReply({
-              content: "신청 기록이 없습니다."
-            });
-            return;
-          }
-
-          if (mode === "10") {
-            // 참가자에서 한 자리 비었고 대기자가 있다면, 대기자 -> 참가자로 자동 승급
-            if (p.length < 10 && w.length > 0) {
-              const promoted = w.shift(); // 가장 먼저 대기 등록한 사람
-              if (promoted) p.push(promoted);
-            }
-            await set10pList(p);
+            replyText = "신청 기록이 없습니다.";
           } else {
-            await set20pList(p);
+            if (mode === "10") {
+              // 참가자에서 한 자리 비었고 대기자가 있다면, 대기자 -> 참가자로 자동 승급
+              if (p.length < 10 && w.length > 0) {
+                const promoted = w.shift();
+                if (promoted) p.push(promoted);
+              }
+              await set10pList(p);
+            } else {
+              await set20pList(p);
+            }
+
+            participantsMap.set(channelId, p);
+            waitlists.set(channelId, w);
+            replyText = "취소 완료!";
+            needUpdateMessage = true;
           }
+        }
 
-          participantsMap.set(channelId, p);
-          waitlists.set(channelId, w);
+        // 응답 갱신
+        if (replyText) {
+          await interaction.editReply({ content: replyText });
+        }
 
-          await interaction.editReply({ content: "취소 완료!" });
-
-          // 현재 메시지 내용 갱신
+        // 모집 메시지 내용 갱신
+        if (needUpdateMessage) {
           await interaction.message.edit({
             content: await buildSignupText(channelId, interaction.guild),
             components: interaction.message.components
@@ -605,14 +603,9 @@ client.on("interactionCreate", async (interaction) => {
     console.error(err);
     if (interaction.isRepliable()) {
       try {
-        if (interaction.deferred) {
+        if (interaction.replied || interaction.deferred) {
           await interaction.editReply({
             content: "오류가 발생했습니다. 다시 시도해주세요."
-          });
-        } else if (interaction.replied) {
-          await interaction.followUp({
-            content: "오류가 발생했습니다. 다시 시도해주세요.",
-            ephemeral: true
           });
         } else {
           await interaction.reply({
