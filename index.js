@@ -1,5 +1,5 @@
 // ===============================
-// 굴뚝 내전 봇 index.js — 빠른 응답 + 실시간 갱신 + 데일리 초기화 + 기능추가
+// 굴뚝 내전 봇 index.js — 빠른 응답 + 실시간 갱신 + 데일리 초기화 + 기능추가(+ 내전코드)
 // ===============================
 
 const http = require("http");
@@ -16,6 +16,7 @@ const {
   SlashCommandBuilder
 } = require("discord.js");
 
+const axios = require("axios"); // ★ Riot API 호출용 추가
 const { google } = require("googleapis");
 const cron = require("node-cron");
 const config = require("./config.json");
@@ -27,6 +28,7 @@ const BOT_TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID || config.SHEET_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID || config.CHANNEL_ID;
 const GUILD_ID = process.env.GUILD_ID || config.GUILD_ID;
+const RIOT_API_KEY = process.env.RIOT_API_KEY || ""; // ★ Riot API 키
 
 // ===============================
 // Discord Client
@@ -62,6 +64,82 @@ const sheets = google.sheets({ version: "v4", auth });
 const SHEET_NAME = "대진표";
 const RANGE_10P = `${SHEET_NAME}!L5:L14`;
 const RANGE_20P = `${SHEET_NAME}!L18:L37`;
+
+// ===============================
+// Riot Tournament (stub) 설정
+// ===============================
+// 현재는 stub 엔드포인트 사용 (테스트용).
+// Tournament API 승인이 나면 아래 BASE_URL을
+//   "https://asia.api.riotgames.com/lol/tournament/v5"
+// 로 바꾸면 실제 토너먼트 코드가 생성됨.
+const RIOT_BASE_URL =
+  "https://asia.api.riotgames.com/lol/tournament-stub/v5";
+
+const riot = axios.create({
+  baseURL: RIOT_BASE_URL,
+  headers: {
+    "X-Riot-Token": RIOT_API_KEY,
+    "Content-Type": "application/json"
+  }
+});
+
+// provider 생성
+async function createProvider() {
+  const body = {
+    region: "KR", // 게임 서버
+    url: "https://example.com/callback" // 콜백 URL (stub라 지금은 아무거나)
+  };
+  const res = await riot.post("/providers", body);
+  return res.data; // providerId
+}
+
+// tournament 생성
+async function createTournament(providerId) {
+  const body = {
+    name: "Gulttuk Inhouse BO3",
+    providerId
+  };
+  const res = await riot.post("/tournaments", body);
+  return res.data; // tournamentId
+}
+
+// BO3용 코드 3개 생성
+async function createBo3Codes(tournamentId, metadata) {
+  const params = {
+    count: 3,
+    tournamentId
+  };
+  const body = {
+    mapType: "SUMMONERS_RIFT",
+    pickType: "TOURNAMENT_DRAFT",
+    spectatorType: "ALL",
+    teamSize: 5,
+    metadata: metadata ?? "gulttuk-inhouse-bo3"
+  };
+  const res = await riot.post("/codes", body, { params });
+  return res.data; // ["KR-XXXX", "KR-YYYY", "KR-ZZZZ"]
+}
+
+// /내전코드에서 한 번에 호출하는 함수
+async function generateInhouseBo3Codes(meta) {
+  if (!RIOT_API_KEY) {
+    throw new Error("RIOT_API_KEY가 설정되어 있지 않습니다.");
+  }
+  try {
+    const providerId = await createProvider();
+    const tournamentId = await createTournament(providerId);
+    const codes = await createBo3Codes(tournamentId, meta);
+    return codes;
+  } catch (err) {
+    if (err.response) {
+      console.error("Riot API Error:", err.response.status, err.response.data);
+      throw new Error(`Riot API 오류: ${err.response.status}`);
+    } else {
+      console.error("Riot API Error:", err.message);
+      throw new Error("Riot API 호출 중 오류가 발생했습니다.");
+    }
+  }
+}
 
 // ===============================
 // 데이터 저장소
@@ -273,7 +351,8 @@ function safeUpdateSignupMessage(channelId) {
       await msg
         .edit({
           content: newText,
-          components: msg.components
+          components: msg.components,
+          allowedMentions: { parse: ["everyone"] } // ★ @everyone 확실히 허용
         })
         .catch(() => {});
     } finally {
@@ -316,7 +395,10 @@ client.once("ready", async () => {
       .setDescription("윤섭 호출"),
     new SlashCommandBuilder()
       .setName("초기화")
-      .setDescription("현재 참가자/대기자 및 시트 명단 초기화")
+      .setDescription("현재 참가자/대기자 및 시트 명단 초기화"),
+    new SlashCommandBuilder() // ★ 새 명령어: /내전코드
+      .setName("내전코드")
+      .setDescription("굴뚝 내전 BO3 토너먼트 코드를 생성합니다.")
   ].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
@@ -354,6 +436,44 @@ client.on("interactionCreate", async (interaction) => {
       if (!modeMap.has(channelId)) modeMap.set(channelId, "10");
       if (!waitlists.has(channelId)) waitlists.set(channelId, []);
 
+      // /내전코드
+      if (commandName === "내전코드") {
+        // 이 명령어는 시트와 관계없고 Riot API만 사용
+        await interaction.deferReply({ ephemeral: false });
+
+        try {
+          const meta = `guild:${interaction.guildId},channel:${interaction.channelId},user:${interaction.user.id}`;
+          const codes = await generateInhouseBo3Codes(meta);
+
+          if (!Array.isArray(codes) || codes.length < 3) {
+            throw new Error("토너먼트 코드가 3개 생성되지 않았습니다.");
+          }
+
+          const [game1, game2, game3] = codes;
+
+          const msg =
+            "**굴뚝 내전 BO3 토너먼트 코드 생성 완료!**\n" +
+            ">>> " +
+            `**Game 1** : \`${game1}\`\n` +
+            `**Game 2** : \`${game2}\`\n` +
+            `**Game 3** : \`${game3}\`\n\n` +
+            "**설정**\n" +
+            "- 서버: **KR**\n" +
+            "- 맵: **소환사의 협곡 (Summoner's Rift)**\n" +
+            "- 모드: **토너먼트 드래프트 (Tournament Draft)**\n" +
+            "- 팀 구성: **5 vs 5**\n\n" +
+            "`롤 클라이언트 > 플레이 > 토너먼트 코드 입력` 메뉴에서 위 코드를 각각 입력하면 됩니다.";
+
+          await interaction.editReply({ content: msg });
+        } catch (err) {
+          console.error("/내전코드 error:", err);
+          await interaction.editReply(
+            "토너먼트 코드 생성 중 오류가 발생했습니다. (Tournament API 승인 여부 또는 RIOT_API_KEY 설정을 확인해주세요.)"
+          );
+        }
+        return;
+      }
+
       // /내전모집
       if (commandName === "내전모집") {
         await syncFromSheet(channelId);
@@ -382,7 +502,8 @@ client.on("interactionCreate", async (interaction) => {
         // @everyone 멘션 포함해서 모집 메시지 생성
         await interaction.reply({
           content: applyEveryonePrefix(baseText),
-          components: [row]
+          components: [row],
+          allowedMentions: { parse: ["everyone"] } // ★ 실제 알림 보장
         });
 
         // reply()는 메시지를 바로 안 돌려줄 수 있으니 fetchReply로 ID 확보
@@ -641,7 +762,8 @@ client.on("interactionCreate", async (interaction) => {
           const baseText = await buildSignupText(channelId, interaction.guild);
           await interaction.message.edit({
             content: applyEveryonePrefix(baseText),
-            components: interaction.message.components
+            components: interaction.message.components,
+            allowedMentions: { parse: ["everyone"] } // ★ 알림 확실히 유지
           });
         } catch (e) {
           console.error("button message.edit error:", e);
@@ -716,7 +838,8 @@ cron.schedule(
       // 자동 모집도 @everyone 멘션 포함
       const msg = await channel.send({
         content: applyEveryonePrefix(baseText),
-        components: [row]
+        components: [row],
+        allowedMentions: { parse: ["everyone"] } // ★ 자동 모집도 확실한 멘션
       });
 
       signupMessages.set(channelId, msg.id);
