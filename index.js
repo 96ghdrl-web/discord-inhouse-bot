@@ -16,7 +16,7 @@ const {
   SlashCommandBuilder
 } = require("discord.js");
 
-const axios = require("axios"); // ★ Riot API 호출용 추가
+const axios = require("axios"); // Riot API 호출용
 const { google } = require("googleapis");
 const cron = require("node-cron");
 const config = require("./config.json");
@@ -28,7 +28,7 @@ const BOT_TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID || config.SHEET_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID || config.CHANNEL_ID;
 const GUILD_ID = process.env.GUILD_ID || config.GUILD_ID;
-const RIOT_API_KEY = process.env.RIOT_API_KEY || ""; // ★ Riot API 키
+const RIOT_API_KEY = process.env.RIOT_API_KEY || ""; // Riot API 키
 
 // ===============================
 // Discord Client
@@ -63,15 +63,15 @@ const sheets = google.sheets({ version: "v4", auth });
 
 const SHEET_NAME = "대진표";
 const RANGE_10P = `${SHEET_NAME}!L5:L14`;
-const RANGE_20P = `${SHEET_NAME}!L18:L37`;
+the RANGE_20P = `${SHEET_NAME}!L18:L37`;
 
 // ===============================
 // Riot Tournament (stub) 설정
 // ===============================
-// 현재는 stub 엔드포인트 사용 (테스트용).
+// 지금은 stub 엔드포인트(테스트용) 사용 중.
 // Tournament API 승인이 나면 아래 BASE_URL을
 //   "https://asia.api.riotgames.com/lol/tournament/v5"
-// 로 바꾸면 실제 토너먼트 코드가 생성됨.
+// 로 바꾸고, 승인된 Production API Key를 RIOT_API_KEY에 넣어주면 됨.
 const RIOT_BASE_URL =
   "https://asia.api.riotgames.com/lol/tournament-stub/v5";
 
@@ -86,8 +86,8 @@ const riot = axios.create({
 // provider 생성
 async function createProvider() {
   const body = {
-    region: "KR", // 게임 서버
-    url: "https://example.com/callback" // 콜백 URL (stub라 지금은 아무거나)
+    region: "KR",
+    url: "https://example.com/callback" // stub라서 아무 URL이나 상관없음
   };
   const res = await riot.post("/providers", body);
   return res.data; // providerId
@@ -123,7 +123,7 @@ async function createBo3Codes(tournamentId, metadata) {
 // /내전코드에서 한 번에 호출하는 함수
 async function generateInhouseBo3Codes(meta) {
   if (!RIOT_API_KEY) {
-    throw new Error("RIOT_API_KEY가 설정되어 있지 않습니다.");
+    throw new Error("NO_KEY"); // 키 자체가 없음
   }
   try {
     const providerId = await createProvider();
@@ -133,10 +133,14 @@ async function generateInhouseBo3Codes(meta) {
   } catch (err) {
     if (err.response) {
       console.error("Riot API Error:", err.response.status, err.response.data);
-      throw new Error(`Riot API 오류: ${err.response.status}`);
+      if (err.response.status === 403) {
+        // Tournament API 권한 없음
+        throw new Error("FORBIDDEN");
+      }
+      throw new Error(`RIOT_${err.response.status}`);
     } else {
       console.error("Riot API Error:", err.message);
-      throw new Error("Riot API 호출 중 오류가 발생했습니다.");
+      throw new Error("RIOT_UNKNOWN");
     }
   }
 }
@@ -145,11 +149,11 @@ async function generateInhouseBo3Codes(meta) {
 // 데이터 저장소
 // ===============================
 const signupMessages = new Map();   // 채널별 모집 메시지 ID
-const participantsMap = new Map();  // 채널별 참가자 목록(문자열)
-const waitlists = new Map();        // 채널별 대기자 목록(문자열)
+const participantsMap = new Map();  // 채널별 참가자 목록(문자열 배열)
+const waitlists = new Map();        // 채널별 대기자 목록(문자열 배열)
 const modeMap = new Map();          // 채널별 모드("10" | "20")
 
-// 메시지 업데이트 충돌 방지용 Lock (명령어/크론에서 사용)
+// 메시지 업데이트 충돌 방지용 Lock
 const messageUpdateLock = new Map();
 
 // Sheet Lock (동시 sheet I/O 방지)
@@ -247,7 +251,7 @@ async function syncFromSheet(channelId) {
   } else {
     const list20 = await get20pList();
     participantsMap.set(channelId, list20);
-    waitlists.set(channelId, []);
+    if (!waitlists.has(channelId)) waitlists.set(channelId, []);
   }
 }
 
@@ -348,13 +352,11 @@ function safeUpdateSignupMessage(channelId) {
       const baseText = await buildSignupText(channelId, channel.guild);
       const newText = applyEveryonePrefix(baseText);
 
-      await msg
-        .edit({
-          content: newText,
-          components: msg.components,
-          allowedMentions: { parse: ["everyone"] } // ★ @everyone 확실히 허용
-        })
-        .catch(() => {});
+      await msg.edit({
+        content: newText,
+        components: msg.components,
+        allowedMentions: { parse: ["everyone"] }
+      }).catch(() => {});
     } finally {
       if (messageUpdateLock.get(channelId) === "queued") {
         messageUpdateLock.set(channelId, true);
@@ -396,7 +398,7 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("초기화")
       .setDescription("현재 참가자/대기자 및 시트 명단 초기화"),
-    new SlashCommandBuilder() // ★ 새 명령어: /내전코드
+    new SlashCommandBuilder() // /내전코드
       .setName("내전코드")
       .setDescription("굴뚝 내전 BO3 토너먼트 코드를 생성합니다.")
   ].map((c) => c.toJSON());
@@ -438,7 +440,6 @@ client.on("interactionCreate", async (interaction) => {
 
       // /내전코드
       if (commandName === "내전코드") {
-        // 이 명령어는 시트와 관계없고 Riot API만 사용
         await interaction.deferReply({ ephemeral: false });
 
         try {
@@ -467,9 +468,22 @@ client.on("interactionCreate", async (interaction) => {
           await interaction.editReply({ content: msg });
         } catch (err) {
           console.error("/내전코드 error:", err);
-          await interaction.editReply(
-            "토너먼트 코드 생성 중 오류가 발생했습니다. (Tournament API 승인 여부 또는 RIOT_API_KEY 설정을 확인해주세요.)"
-          );
+
+          let humanMsg =
+            "토너먼트 코드 생성 중 오류가 발생했습니다.";
+
+          if (err.message === "NO_KEY") {
+            humanMsg =
+              "RIOT_API_KEY 환경 변수가 설정되어 있지 않습니다.\nRender 환경 변수에 Riot API 키를 넣어주세요.";
+          } else if (err.message === "FORBIDDEN") {
+            humanMsg =
+              "토너먼트 API에 접근할 권한이 없어 403 Forbidden 오류가 발생했습니다.\n" +
+              "- Riot Developer Support에 제출한 Tournament API 요청이 아직 승인되지 않았거나,\n" +
+              "- 승인된 Production API Key 대신 일반 Development Key를 사용 중일 수 있습니다.\n\n" +
+              "Tournament API 신청이 승인된 후, 해당 키를 RIOT_API_KEY에 넣고 다시 시도해주세요.";
+          }
+
+          await interaction.editReply(humanMsg);
         }
         return;
       }
@@ -499,14 +513,12 @@ client.on("interactionCreate", async (interaction) => {
           if (prev) prev.delete().catch(() => {});
         }
 
-        // @everyone 멘션 포함해서 모집 메시지 생성
         await interaction.reply({
           content: applyEveryonePrefix(baseText),
           components: [row],
-          allowedMentions: { parse: ["everyone"] } // ★ 실제 알림 보장
+          allowedMentions: { parse: ["everyone"] }
         });
 
-        // reply()는 메시지를 바로 안 돌려줄 수 있으니 fetchReply로 ID 확보
         const sent = await interaction.fetchReply();
         signupMessages.set(channelId, sent.id);
       }
@@ -594,7 +606,7 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // /시작 (참가자 멘션 + 안내 문구)
+      // /시작
       else if (commandName === "시작") {
         await syncFromSheet(channelId);
 
@@ -648,14 +660,10 @@ client.on("interactionCreate", async (interaction) => {
       else if (commandName === "초기화") {
         await acquireLock();
         try {
-          // 시트 명단 전체 초기화 (10/20 모두)
           await set10pList([]);
           await set20pList([]);
-
-          // 메모리 참가/대기자 초기화
           participantsMap.set(channelId, []);
           waitlists.set(channelId, []);
-
         } catch (e) {
           console.error("/초기화 error:", e);
           return interaction.reply({
@@ -666,7 +674,6 @@ client.on("interactionCreate", async (interaction) => {
           releaseLock();
         }
 
-        // 모집 메시지 있으면 내용도 초기화된 상태로 갱신
         safeUpdateSignupMessage(channelId);
 
         return interaction.reply({
@@ -677,27 +684,29 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ------------------------------
-    // Button (참가/취소) — Sheets 비동기, 메시지 즉시 갱신
-    // ------------------------------
+    // Button (참가/취소)
+// ------------------------------
     else if (interaction.isButton()) {
-      // 1) 바로 ACK (버튼 스피너 짧게 유지)
+      // 1) 바로 ACK
       try {
         await interaction.deferUpdate();
       } catch {
         return;
       }
 
+      // 봇이 재시작된 뒤 기존 메시지 버튼을 눌렀을 수도 있으므로,
+      // 메모리에 데이터가 없으면 시트에서 한 번 동기화해 온다.
+      if (!participantsMap.has(channelId) || !waitlists.has(channelId)) {
+        await syncFromSheet(channelId);
+        if (!waitlists.has(channelId)) waitlists.set(channelId, []);
+      }
+
       let replyText = "";
       let needUpdate = false;
 
-      // 2) 메모리 기준으로만 참가/대기자 처리 (시트 I/O 없음)
       const mode = getMode(channelId);
-      if (!participantsMap.has(channelId))
-        participantsMap.set(channelId, []);
-      if (!waitlists.has(channelId)) waitlists.set(channelId, []);
-
-      const p = participantsMap.get(channelId);
-      const w = waitlists.get(channelId);
+      const p = participantsMap.get(channelId) || [];
+      const w = waitlists.get(channelId) || [];
 
       const member = interaction.member;
       const userName = getMemberDisplayName(member);
@@ -705,7 +714,6 @@ client.on("interactionCreate", async (interaction) => {
       if (!userName) {
         replyText = "사용자 정보를 불러올 수 없습니다.";
       } else {
-        // 참가
         if (interaction.customId === "signup") {
           if (p.includes(userName) || w.includes(userName)) {
             replyText = "이미 신청한 상태입니다.";
@@ -728,10 +736,7 @@ client.on("interactionCreate", async (interaction) => {
             }
             needUpdate = true;
           }
-        }
-
-        // 취소
-        else if (interaction.customId === "cancel") {
+        } else if (interaction.customId === "cancel") {
           const oldP = p.length;
           const oldW = w.length;
 
@@ -744,7 +749,6 @@ client.on("interactionCreate", async (interaction) => {
             replyText = "신청 기록이 없습니다.";
           } else {
             if (mode === "10") {
-              // 대기자 승급
               if (p.length < 10 && w.length > 0) {
                 const moved = w.shift();
                 if (moved) p.push(moved);
@@ -756,23 +760,25 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // 3) 모집 메시지 내용 바로 갱신 (@everyone 유지, 재멘션은 안 울림)
+      participantsMap.set(channelId, p);
+      waitlists.set(channelId, w);
+
+      // 3) 모집 메시지 내용 갱신
       if (needUpdate) {
         try {
           const baseText = await buildSignupText(channelId, interaction.guild);
           await interaction.message.edit({
             content: applyEveryonePrefix(baseText),
             components: interaction.message.components,
-            allowedMentions: { parse: ["everyone"] } // ★ 알림 확실히 유지
+            allowedMentions: { parse: ["everyone"] }
           });
         } catch (e) {
           console.error("button message.edit error:", e);
         }
-        // 시트 동기화는 백그라운드에서
         syncParticipantsToSheet(channelId).catch(() => {});
       }
 
-      // 4) 에페메랄 안내 메시지 (followUp)
+      // 4) 에페메랄 안내
       try {
         await interaction.followUp({
           content: replyText || "처리 중 오류가 발생했습니다.",
@@ -788,7 +794,7 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ===============================
-// 자동 모집 (매일 17시, 시트/메모리 명단 초기화 후 모집)
+// 자동 모집 (매일 17시)
 // ===============================
 cron.schedule(
   "0 17 * * *",
@@ -799,14 +805,9 @@ cron.schedule(
 
       await acquireLock();
       try {
-        // 항상 10인 모드로 초기화
         modeMap.set(channelId, "10");
-
-        // 시트 내전 명단 초기화
         await set10pList([]);
         await set20pList([]);
-
-        // 메모리 참가/대기자 초기화
         participantsMap.set(channelId, []);
         waitlists.set(channelId, []);
       } finally {
@@ -814,7 +815,7 @@ cron.schedule(
       }
 
       const channel = await client.channels.fetch(channelId).catch(() => null);
-      if (!channel || !channel.isTextBased()) return;
+      if (!channel || !channel.isTextUsed()) return;
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -827,7 +828,7 @@ cron.schedule(
           .setStyle(ButtonStyle.Danger)
       );
 
-      const baseText = await buildSignupText(channelId, channel.guild); // 참가자 0명 기준
+      const baseText = await buildSignupText(channelId, channel.guild);
 
       const prevId = signupMessages.get(channelId);
       if (prevId) {
@@ -835,11 +836,10 @@ cron.schedule(
         if (prev) prev.delete().catch(() => {});
       }
 
-      // 자동 모집도 @everyone 멘션 포함
       const msg = await channel.send({
         content: applyEveryonePrefix(baseText),
         components: [row],
-        allowedMentions: { parse: ["everyone"] } // ★ 자동 모집도 확실한 멘션
+        allowedMentions: { parse: ["everyone"] }
       });
 
       signupMessages.set(channelId, msg.id);
