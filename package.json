@@ -9,7 +9,7 @@
     "discord.js": "^14.24.2",
     "dotenv": "^17.2.3",
     "googleapis": "^166.0.0",
-    "node-cron": "^4.2.1"
+    "node-cron": "^4.2.1",
     "axios": "^1.7.0"
   }
 }
