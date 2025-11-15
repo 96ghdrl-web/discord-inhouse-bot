@@ -1,5 +1,5 @@
 // ===============================
-// 굴뚝 내전 봇 index.js — 빠른 응답 + 실시간 갱신 + 데일리 초기화 최종본
+// 굴뚝 내전 봇 index.js — 빠른 응답 + 실시간 갱신 + 데일리 초기화 + 기능추가
 // ===============================
 
 const http = require("http");
@@ -226,16 +226,21 @@ async function buildSignupText(channelId, guild) {
   const dw = await buildDisplayNames(guild, w);
 
   if (mode === "10") {
-    let text = "📢 오늘 굴뚝 내전 참가자 모집!\n\n";
+    let text = "📢 오늘 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!\n\n";
     text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
     if (w.length)
       text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
     return text;
   }
 
-  let text = "📢 20명 내전 모집!\n\n";
+  let text = "📢 20명 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!\n\n";
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
   return text;
+}
+
+// @everyone 멘션을 앞에 붙이는 헬퍼
+function applyEveryonePrefix(text) {
+  return `@everyone ${text}`;
 }
 
 // ===============================
@@ -262,7 +267,8 @@ function safeUpdateSignupMessage(channelId) {
       const msg = await channel.messages.fetch(msgId).catch(() => null);
       if (!msg) return;
 
-      const newText = await buildSignupText(channelId, channel.guild);
+      const baseText = await buildSignupText(channelId, channel.guild);
+      const newText = applyEveryonePrefix(baseText);
 
       await msg
         .edit({
@@ -307,7 +313,10 @@ client.once("ready", async () => {
       .setDescription("참가자 소집"),
     new SlashCommandBuilder()
       .setName("굴뚝딱가리")
-      .setDescription("윤섭 호출")
+      .setDescription("윤섭 호출"),
+    new SlashCommandBuilder()
+      .setName("초기화")
+      .setDescription("현재 참가자/대기자 및 시트 명단 초기화")
   ].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
@@ -360,7 +369,7 @@ client.on("interactionCreate", async (interaction) => {
             .setStyle(ButtonStyle.Danger)
         );
 
-        const text = await buildSignupText(channelId, interaction.guild);
+        const baseText = await buildSignupText(channelId, interaction.guild);
 
         const prevId = signupMessages.get(channelId);
         if (prevId) {
@@ -370,12 +379,15 @@ client.on("interactionCreate", async (interaction) => {
           if (prev) prev.delete().catch(() => {});
         }
 
-        const msg = await interaction.reply({
-          content: text,
+        // @everyone 멘션 포함해서 모집 메시지 생성
+        await interaction.reply({
+          content: applyEveryonePrefix(baseText),
           components: [row]
         });
 
-        signupMessages.set(channelId, msg.id);
+        // reply()는 메시지를 바로 안 돌려줄 수 있으니 fetchReply로 ID 확보
+        const sent = await interaction.fetchReply();
+        signupMessages.set(channelId, sent.id);
       }
 
       // /내전멤버
@@ -510,6 +522,37 @@ client.on("interactionCreate", async (interaction) => {
           ephemeral: false
         });
       }
+
+      // /초기화
+      else if (commandName === "초기화") {
+        await acquireLock();
+        try {
+          // 시트 명단 전체 초기화 (10/20 모두)
+          await set10pList([]);
+          await set20pList([]);
+
+          // 메모리 참가/대기자 초기화
+          participantsMap.set(channelId, []);
+          waitlists.set(channelId, []);
+
+        } catch (e) {
+          console.error("/초기화 error:", e);
+          return interaction.reply({
+            content: "초기화 중 오류가 발생했습니다.",
+            ephemeral: true
+          });
+        } finally {
+          releaseLock();
+        }
+
+        // 모집 메시지 있으면 내용도 초기화된 상태로 갱신
+        safeUpdateSignupMessage(channelId);
+
+        return interaction.reply({
+          content: "현재 참가자/대기자 및 구글 시트 명단을 모두 초기화했습니다.",
+          ephemeral: true
+        });
+      }
     }
 
     // ------------------------------
@@ -592,12 +635,12 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // 3) 모집 메시지 내용 바로 갱신
+      // 3) 모집 메시지 내용 바로 갱신 (@everyone 유지, 재멘션은 안 울림)
       if (needUpdate) {
         try {
-          const newText = await buildSignupText(channelId, interaction.guild);
+          const baseText = await buildSignupText(channelId, interaction.guild);
           await interaction.message.edit({
-            content: newText,
+            content: applyEveryonePrefix(baseText),
             components: interaction.message.components
           });
         } catch (e) {
@@ -662,7 +705,7 @@ cron.schedule(
           .setStyle(ButtonStyle.Danger)
       );
 
-      const text = await buildSignupText(channelId, channel.guild); // 참가자 0명 기준
+      const baseText = await buildSignupText(channelId, channel.guild); // 참가자 0명 기준
 
       const prevId = signupMessages.get(channelId);
       if (prevId) {
@@ -670,8 +713,9 @@ cron.schedule(
         if (prev) prev.delete().catch(() => {});
       }
 
+      // 자동 모집도 @everyone 멘션 포함
       const msg = await channel.send({
-        content: text,
+        content: applyEveryonePrefix(baseText),
         components: [row]
       });
 
