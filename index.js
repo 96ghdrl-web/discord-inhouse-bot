@@ -608,7 +608,7 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // /시작
+      // /시작  ❗ 성능 개선: 전체 멤버 fetch 안 함
       else if (commandName === "시작") {
         await syncFromSheet(channelId);
 
@@ -620,13 +620,15 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        const mentions = await buildMentionsForNames(interaction.guild, p);
+        // 길드 전체 멤버 fetch를 안 하고, 시트/메모리에 있는 이름 문자열 그대로 사용
         await interaction.reply({
-          content: `${mentions.join(" ")}\n내전 시작합니다! 모두 모여주세요~`
+          content:
+            "@everyone 내전 시작합니다! 모두 모여주세요~\n\n" +
+            `현재 참가자 (${p.length}명):\n${p.join(" ")}`
         });
       }
 
-      // /굴뚝딱가리
+      // /굴뚝딱가리 — 내전-모집 채널에서만 사용 가능
       else if (commandName === "굴뚝딱가리") {
         const allowedChannelId = "1439215856440578078";
 
@@ -709,7 +711,13 @@ client.on("interactionCreate", async (interaction) => {
       // 봇 재시작된 뒤 기존 메시지 버튼을 눌렀을 수도 있으므로,
       // 메모리에 데이터가 없으면 시트에서 한 번 동기화해 온다.
       if (!participantsMap.has(channelId) || !waitlists.has(channelId)) {
-        await syncFromSheet(channelId);
+        try {
+          await syncFromSheet(channelId);
+        } catch (e) {
+          console.error("버튼 처리 중 시트 동기화 오류:", e);
+          if (!participantsMap.has(channelId)) participantsMap.set(channelId, []);
+          if (!waitlists.has(channelId)) waitlists.set(channelId, []);
+        }
         if (!waitlists.has(channelId)) waitlists.set(channelId, []);
       }
 
