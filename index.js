@@ -313,7 +313,7 @@ async function buildSignupText(channelId, guild) {
   const dw = await buildDisplayNames(guild, w);
 
   if (mode === "10") {
-    let text = "/n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n참가자 10명이 모이면 시작합니다./n대기자가 많을 경우 20명 내전으로 진행합니다./n/n";
+    let text = "\n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n참가자 10명이 모이면 시작합니다.\n대기자가 많을 경우 20명 내전으로 진행합니다.\n\n";
     text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
     if (w.length)
       text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
