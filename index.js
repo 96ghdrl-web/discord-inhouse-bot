@@ -608,10 +608,10 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // /시작  ❗ 성능 개선: 전체 멤버 fetch 안 함
+      // ✅ /시작 — 실제 멘션 알림 가도록 수정
       else if (commandName === "시작") {
-        await syncFromSheet(channelId);
-
+        // 더 이상 시트에서 다시 읽지 않고,
+        // 버튼으로 모인 현재 participantsMap 기준으로만 알림 보냄
         const p = participantsMap.get(channelId) || [];
         if (!p.length) {
           return interaction.reply({
@@ -620,11 +620,12 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        // 길드 전체 멤버 fetch를 안 하고, 시트/메모리에 있는 이름 문자열 그대로 사용
+        // 참가자 이름 → 디스코드 멤버 탐색 → <@id> 형태로 변환
+        const mentions = await buildMentionsForNames(interaction.guild, p);
+
         await interaction.reply({
-          content:
-            "@everyone 내전 시작합니다! 모두 모여주세요~\n\n" +
-            `현재 참가자 (${p.length}명):\n${p.join(" ")}`
+          content: `${mentions.join(" ")}\n내전 시작합니다! 모두 모여주세요~`,
+          allowedMentions: { parse: ["users"] } // 실제 유저 멘션 알림 보내기
         });
       }
 
@@ -711,13 +712,7 @@ client.on("interactionCreate", async (interaction) => {
       // 봇 재시작된 뒤 기존 메시지 버튼을 눌렀을 수도 있으므로,
       // 메모리에 데이터가 없으면 시트에서 한 번 동기화해 온다.
       if (!participantsMap.has(channelId) || !waitlists.has(channelId)) {
-        try {
-          await syncFromSheet(channelId);
-        } catch (e) {
-          console.error("버튼 처리 중 시트 동기화 오류:", e);
-          if (!participantsMap.has(channelId)) participantsMap.set(channelId, []);
-          if (!waitlists.has(channelId)) waitlists.set(channelId, []);
-        }
+        await syncFromSheet(channelId);
         if (!waitlists.has(channelId)) waitlists.set(channelId, []);
       }
 
