@@ -30,6 +30,9 @@ const CHANNEL_ID = process.env.CHANNEL_ID || config.CHANNEL_ID;
 const GUILD_ID = process.env.GUILD_ID || config.GUILD_ID;
 const RIOT_API_KEY = process.env.RIOT_API_KEY || ""; // Riot API 키
 
+// ✅ 굴뚝딱가리 관련 모든 명령어 허용 채널 (내전-모집 채널)
+const ALLOWED_CHANNEL_ID = "1439215856440578078";
+
 // ===============================
 // Discord Client
 // ===============================
@@ -437,6 +440,14 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isChatInputCommand()) {
       const { commandName } = interaction;
 
+      // ✅ 굴뚝딱가리 관련 모든 명령어는 내전-모집 채널에서만 사용
+      if (channelId !== ALLOWED_CHANNEL_ID) {
+        return interaction.reply({
+          content: `이 명령어는 <#${ALLOWED_CHANNEL_ID}> 채널에서만 사용할 수 있습니다.`,
+          ephemeral: true
+        });
+      }
+
       if (!modeMap.has(channelId)) modeMap.set(channelId, "10");
       if (!waitlists.has(channelId)) waitlists.set(channelId, []);
 
@@ -608,10 +619,8 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // ✅ /시작 — 실제 멘션 알림 가도록 수정
+      // /시작 — 실제 멘션 알림
       else if (commandName === "시작") {
-        // 더 이상 시트에서 다시 읽지 않고,
-        // 버튼으로 모인 현재 participantsMap 기준으로만 알림 보냄
         const p = participantsMap.get(channelId) || [];
         if (!p.length) {
           return interaction.reply({
@@ -620,27 +629,16 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        // 참가자 이름 → 디스코드 멤버 탐색 → <@id> 형태로 변환
         const mentions = await buildMentionsForNames(interaction.guild, p);
 
         await interaction.reply({
           content: `${mentions.join(" ")}\n내전 시작합니다! 모두 모여주세요~`,
-          allowedMentions: { parse: ["users"] } // 실제 유저 멘션 알림 보내기
+          allowedMentions: { parse: ["users"] }
         });
       }
 
-      // /굴뚝딱가리 — 내전-모집 채널에서만 사용 가능
+      // /굴뚝딱가리
       else if (commandName === "굴뚝딱가리") {
-        const allowedChannelId = "1439215856440578078";
-
-        // 내전-모집 채널이 아니면 사용 불가
-        if (interaction.channelId !== allowedChannelId) {
-          return interaction.reply({
-            content: "이 명령어는 <#1439215856440578078> 채널에서만 사용할 수 있습니다.",
-            ephemeral: true
-          });
-        }
-
         const members = await interaction.guild.members
           .fetch()
           .catch(() => null);
@@ -712,7 +710,13 @@ client.on("interactionCreate", async (interaction) => {
       // 봇 재시작된 뒤 기존 메시지 버튼을 눌렀을 수도 있으므로,
       // 메모리에 데이터가 없으면 시트에서 한 번 동기화해 온다.
       if (!participantsMap.has(channelId) || !waitlists.has(channelId)) {
-        await syncFromSheet(channelId);
+        try {
+          await syncFromSheet(channelId);
+        } catch (e) {
+          console.error("버튼 처리 중 시트 동기화 오류:", e);
+          if (!participantsMap.has(channelId)) participantsMap.set(channelId, []);
+          if (!waitlists.has(channelId)) waitlists.set(channelId, []);
+        }
         if (!waitlists.has(channelId)) waitlists.set(channelId, []);
       }
 
