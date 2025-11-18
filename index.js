@@ -34,6 +34,23 @@ const RIOT_API_KEY = process.env.RIOT_API_KEY || ""; // Riot API 키
 const ALLOWED_CHANNEL_ID = "1439215856440578078";
 
 // ===============================
+// KST 날짜 처리 유틸 (수동 모집 여부 체크용)
+// ===============================
+let lastManualRecruitDate = null;
+
+function getTodayKSTString() {
+  const now = new Date();
+  const kstString = now.toLocaleString("en-US", { timeZone: "Asia/Seoul" });
+  const kst = new Date(kstString);
+
+  const y = kst.getFullYear();
+  const m = String(kst.getMonth() + 1).padStart(2, "0");
+  const d = String(kst.getDate()).padStart(2, "0");
+
+  return `${y}-${m}-${d}`;
+}
+
+// ===============================
 // Discord Client
 // ===============================
 const client = new Client({
@@ -67,6 +84,10 @@ const sheets = new google.sheets({ version: "v4", auth });
 const SHEET_NAME = "대진표";
 const RANGE_10P = `${SHEET_NAME}!L5:L14`;
 const RANGE_20P = `${SHEET_NAME}!L18:L37`;
+
+// 참가/대기자 팀 배치 정보 등 초기화용 추가 범위
+const RANGE_TEAM_10 = `${SHEET_NAME}!E4:I5`;
+const RANGE_TEAM_20 = `${SHEET_NAME}!E18:I21`;
 
 // ===============================
 // Riot Tournament (stub) 설정
@@ -219,6 +240,25 @@ async function set20pList(list) {
   await writeRange(RANGE_20P, rows);
 }
 
+// ✅ 임의 범위를 전부 빈 값으로 초기화하는 유틸
+async function clearRange(range, rows, cols) {
+  const values = [];
+  for (let r = 0; r < rows; r++) {
+    const row = [];
+    for (let c = 0; c < cols; c++) row.push("");
+    values.push(row);
+  }
+  await writeRange(range, values);
+}
+
+// 참가자/대기자 관련 전체 시트 초기화 (E4:I5, E18:I21, L5:L14, L18:L37)
+async function clearDailySheetAll() {
+  await clearRange(RANGE_TEAM_10, 2, 5);   // E4:I5
+  await clearRange(RANGE_TEAM_20, 4, 5);   // E18:I21
+  await clearRange(RANGE_10P, 10, 1);      // L5:L14
+  await clearRange(RANGE_20P, 20, 1);      // L18:L37
+}
+
 // 참가자 목록을 시트에 동기화 (버튼 클릭 후 백그라운드에서 호출)
 async function syncParticipantsToSheet(channelId) {
   await acquireLock();
@@ -313,14 +353,14 @@ async function buildSignupText(channelId, guild) {
   const dw = await buildDisplayNames(guild, w);
 
   if (mode === "10") {
-    let text = "\n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n참가자 10명이 모이면 시작합니다.\n대기자가 많을 경우 20명 내전으로 진행합니다.\n\n";
+    let text = "\n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n참가자 10명이 모이면 시작! \n만약 대기자가 많으면 20명 내전 진행\n\n";
     text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
     if (w.length)
       text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
     return text;
   }
 
-  let text = "📢 20명 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!\n\n";
+  let text = "⚔️ 20명 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!\n\n";
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
   return text;
 }
@@ -534,6 +574,9 @@ client.on("interactionCreate", async (interaction) => {
 
         const sent = await interaction.fetchReply();
         signupMessages.set(channelId, sent.id);
+
+        // ✅ 오늘 수동으로 /내전모집이 실행되었음을 기록 (KST 기준)
+        lastManualRecruitDate = getTodayKSTString();
       }
 
       // /내전멤버
@@ -813,6 +856,52 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ===============================
+// 매일 오전 8시 — 참가/대기자 + 시트 정보 초기화
+// ===============================
+cron.schedule(
+  "0 8 * * *",
+  async () => {
+    try {
+      const channelId = CHANNEL_ID;
+      if (!channelId) return;
+
+      await acquireLock();
+      try {
+        // 메모리 상 참가자/대기자 초기화
+        participantsMap.set(channelId, []);
+        waitlists.set(channelId, []);
+        // 구글 시트 관련 범위 전체 초기화
+        await clearDailySheetAll();
+      } finally {
+        releaseLock();
+      }
+
+      // 기존 모집 메시지가 있다면 내용만 "빈 상태"로 갱신 (알림/멘션 없음)
+      const msgId = signupMessages.get(channelId);
+      if (!msgId) return;
+
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased()) return;
+
+      const msg = await channel.messages.fetch(msgId).catch(() => null);
+      if (!msg) return;
+
+      const baseText = await buildSignupText(channelId, channel.guild);
+      await msg
+        .edit({
+          content: baseText,
+          components: msg.components,
+          allowedMentions: { parse: [] } // @everyone 멘션 안 날리도록
+        })
+        .catch(() => {});
+    } catch (e) {
+      console.error("08시 자동 초기화 실패:", e);
+    }
+  },
+  { timezone: "Asia/Seoul" }
+);
+
+// ===============================
 // 자동 모집 (매일 17시)
 // ===============================
 cron.schedule(
@@ -821,6 +910,15 @@ cron.schedule(
     try {
       const channelId = CHANNEL_ID;
       if (!channelId) return;
+
+      // ✅ 오늘 이미 수동으로 /내전모집을 쓴 경우 자동 모집 건너뜀
+      const todayKST = getTodayKSTString();
+      if (lastManualRecruitDate === todayKST) {
+        console.log(
+          "[자동 모집] 오늘 이미 수동 /내전모집이 실행되어 자동 모집을 건너뜁니다."
+        );
+        return;
+      }
 
       await acquireLock();
       try {
