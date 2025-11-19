@@ -366,7 +366,7 @@ async function buildMentionsForNames(guild, names) {
 function getDefaultHeaderForMode(mode) {
   if (mode === "10") {
     return (
-      "⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n" +
+      "\n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n" +
       "참가자 10명이 모이면 시작! \n" +
       "만약 대기자가 많으면 20명 내전 진행"
     );
@@ -623,7 +623,7 @@ client.on("interactionCreate", async (interaction) => {
         if (timeRange) {
           // 8시~9시 형식 헤더
           const header =
-            `⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
+            `\n⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
             "참가자 10명이 모이면 시작! \n" +
             "만약 대기자가 많으면 20명 내전 진행";
           signupHeaderMap.set(channelId, header);
