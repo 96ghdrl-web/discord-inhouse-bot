@@ -1,5 +1,5 @@
 // ===============================
-// 굴뚝 내전 봇 index.js — 빠른 응답 + 실시간 갱신 + 데일리 초기화 + 기능추가(+ 내전코드)
+// 굴뚝 내전 봇 index.js
 // ===============================
 
 const http = require("http");
@@ -16,7 +16,7 @@ const {
   SlashCommandBuilder
 } = require("discord.js");
 
-const axios = require("axios"); // Riot API 호출용
+const axios = require("axios");
 const { google } = require("googleapis");
 const cron = require("node-cron");
 const config = require("./config.json");
@@ -28,13 +28,13 @@ const BOT_TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID || config.SHEET_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID || config.CHANNEL_ID;
 const GUILD_ID = process.env.GUILD_ID || config.GUILD_ID;
-const RIOT_API_KEY = process.env.RIOT_API_KEY || ""; // Riot API 키
+const RIOT_API_KEY = process.env.RIOT_API_KEY || "";
 
-// ✅ 굴뚝딱가리 관련 모든 명령어 허용 채널 (내전-모집 채널)
+// ✅ 내전 관련 명령어 허용 채널
 const ALLOWED_CHANNEL_ID = "1439215856440578078";
 
 // ===============================
-// KST 날짜 처리 유틸 (수동 모집 여부 체크용)
+// KST 날짜 유틸 (자동 모집 중복 방지용)
 // ===============================
 let lastManualRecruitDate = null;
 
@@ -84,21 +84,13 @@ const sheets = new google.sheets({ version: "v4", auth });
 const SHEET_NAME = "대진표";
 const RANGE_10P = `${SHEET_NAME}!L5:L14`;
 const RANGE_20P = `${SHEET_NAME}!L18:L37`;
-
-// 참가/대기자 팀 배치 정보 등 초기화용 추가 범위
 const RANGE_TEAM_10 = `${SHEET_NAME}!E4:I5`;
 const RANGE_TEAM_20 = `${SHEET_NAME}!E18:I21`;
-
-// ✅ 수동 /내전모집 실행 날짜를 저장할 메타 셀 (웬만하면 안 쓰는 영역 사용)
-const RANGE_LAST_MANUAL = `${SHEET_NAME}!Z1`;
+const RANGE_LAST_MANUAL = `${SHEET_NAME}!Z1`; // 수동 /내전모집 날짜 저장
 
 // ===============================
-// Riot Tournament (stub) 설정
+// Riot Tournament Stub 설정
 // ===============================
-// 지금은 stub 엔드포인트(테스트용) 사용 중.
-// Tournament API 승인이 나면 아래 BASE_URL을
-//   "https://asia.api.riotgames.com/lol/tournament/v5"
-// 로 바꾸고, 승인된 Production API Key를 RIOT_API_KEY에 넣어주면 됨.
 const RIOT_BASE_URL =
   "https://asia.api.riotgames.com/lol/tournament-stub/v5";
 
@@ -110,27 +102,24 @@ const riot = axios.create({
   }
 });
 
-// provider 생성
 async function createProvider() {
   const body = {
     region: "KR",
-    url: "https://example.com/callback" // stub라서 아무 URL이나 상관없음
+    url: "https://example.com/callback"
   };
   const res = await riot.post("/providers", body);
-  return res.data; // providerId
+  return res.data;
 }
 
-// tournament 생성
 async function createTournament(providerId) {
   const body = {
     name: "Gulttuk Inhouse BO3",
     providerId
   };
   const res = await riot.post("/tournaments", body);
-  return res.data; // tournamentId
+  return res.data;
 }
 
-// BO3용 코드 3개 생성
 async function createBo3Codes(tournamentId, metadata) {
   const params = {
     count: 3,
@@ -144,13 +133,11 @@ async function createBo3Codes(tournamentId, metadata) {
     metadata: metadata ?? "gulttuk-inhouse-bo3"
   };
   const res = await riot.post("/codes", body, { params });
-  return res.data; // ["KR-XXXX", "KR-YYYY", "KR-ZZZZ"]
+  return res.data;
 }
 
-// /내전코드에서 한 번에 호출하는 함수
 async function generateInhouseBo3Codes(meta) {
   if (!RIOT_API_KEY) {
-    // 키 자체를 못 읽은 경우
     throw new Error("NO_KEY");
   }
 
@@ -163,7 +150,6 @@ async function generateInhouseBo3Codes(meta) {
     if (err.response) {
       console.error("Riot API Error:", err.response.status, err.response.data);
       if (err.response.status === 403) {
-        // Tournament API 권한 없음
         throw new Error("FORBIDDEN");
       }
       throw new Error(`RIOT_${err.response.status}`);
@@ -178,21 +164,22 @@ async function generateInhouseBo3Codes(meta) {
 // 데이터 저장소
 // ===============================
 const signupMessages = new Map();   // 채널별 모집 메시지 ID
-const participantsMap = new Map();  // 채널별 참가자 목록(문자열 배열)
-const waitlists = new Map();        // 채널별 대기자 목록(문자열 배열)
+const participantsMap = new Map();  // 채널별 참가자 배열
+const waitlists = new Map();        // 채널별 대기자 배열
 const modeMap = new Map();          // 채널별 모드("10" | "20")
+const messageUpdateLock = new Map();// 메시지 업데이트 락
+const signupHeaderMap = new Map();  // 채널별 헤더 문구
 
-// 메시지 업데이트 충돌 방지용 Lock
-const messageUpdateLock = new Map();
-
-// Sheet Lock (동시 sheet I/O 방지)
+// Sheet I/O Lock
 let sheetLock = false;
 
 // ===============================
 // Lock 유틸
 // ===============================
 async function acquireLock() {
-  while (sheetLock) await new Promise((res) => setTimeout(res, 20));
+  while (sheetLock) {
+    await new Promise((res) => setTimeout(res, 20));
+  }
   sheetLock = true;
 }
 function releaseLock() {
@@ -243,7 +230,6 @@ async function set20pList(list) {
   await writeRange(RANGE_20P, rows);
 }
 
-// ✅ 임의 범위를 전부 빈 값으로 초기화하는 유틸
 async function clearRange(range, rows, cols) {
   const values = [];
   for (let r = 0; r < rows; r++) {
@@ -254,15 +240,14 @@ async function clearRange(range, rows, cols) {
   await writeRange(range, values);
 }
 
-// 참가자/대기자 관련 전체 시트 초기화 (E4:I5, E18:I21, L5:L14, L18:L37)
 async function clearDailySheetAll() {
-  await clearRange(RANGE_TEAM_10, 2, 5);   // E4:I5
-  await clearRange(RANGE_TEAM_20, 4, 5);   // E18:I21
-  await clearRange(RANGE_10P, 10, 1);      // L5:L14
-  await clearRange(RANGE_20P, 20, 1);      // L18:L37
+  await clearRange(RANGE_TEAM_10, 2, 5);
+  await clearRange(RANGE_TEAM_20, 4, 5);
+  await clearRange(RANGE_10P, 10, 1);
+  await clearRange(RANGE_20P, 20, 1);
 }
 
-// ✅ 수동 /내전모집 실행 날짜를 시트에서 읽기
+// ✅ 수동 /내전모집 날짜 시트에서 읽기
 async function getLastManualRecruitDateFromSheet() {
   try {
     const res = await sheets.spreadsheets.values.get({
@@ -280,7 +265,7 @@ async function getLastManualRecruitDateFromSheet() {
   }
 }
 
-// ✅ 오늘 날짜를 시트에 기록
+// ✅ 오늘 날짜를 시트에 기록 + 메모리에 반영
 async function setLastManualRecruitDateToToday() {
   const today = getTodayKSTString();
   try {
@@ -296,7 +281,6 @@ async function setLastManualRecruitDateToToday() {
   lastManualRecruitDate = today;
 }
 
-// 참가자 목록을 시트에 동기화 (버튼 클릭 후 백그라운드에서 호출)
 async function syncParticipantsToSheet(channelId) {
   await acquireLock();
   try {
@@ -322,7 +306,6 @@ function getMode(channelId) {
   return modeMap.get(channelId) || "10";
 }
 
-// 명령어/크론에서만 사용 (버튼에서는 더 이상 시트 읽지 않음)
 async function syncFromSheet(channelId) {
   const mode = getMode(channelId);
 
@@ -361,7 +344,6 @@ async function buildDisplayNames(guild, names) {
   });
 }
 
-// 저장된 이름을 실제 멤버 멘션(<@id>)으로 변환
 async function buildMentionsForNames(guild, names) {
   if (!guild || !names || !names.length) return [];
   const members = await guild.members.fetch().catch(() => null);
@@ -379,6 +361,40 @@ async function buildMentionsForNames(guild, names) {
 }
 
 // ===============================
+// 헤더 문구 유틸
+// ===============================
+function getDefaultHeaderForMode(mode) {
+  if (mode === "10") {
+    return (
+      "⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n" +
+      "참가자 10명이 모이면 시작! \n" +
+      "만약 대기자가 많으면 20명 내전 진행"
+    );
+  }
+  // 20 모드 기본 헤더
+  return "⚔️ 20명 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!";
+}
+
+function getHeaderForChannel(channelId, mode) {
+  const saved = signupHeaderMap.get(channelId);
+  if (saved) return saved;
+  return getDefaultHeaderForMode(mode);
+}
+
+// "8시" → "8시~9시" 등으로 변환
+function getTimeRangeLabel(raw) {
+  if (!raw) return null;
+  const cleaned = raw.toString().replace("시", "").trim();
+  const hour = parseInt(cleaned, 10);
+  if (hour === 8) return "8시~9시";
+  if (hour === 9) return "9시~10시";
+  if (hour === 10) return "10시~11시";
+  if (hour === 5 || hour === 17) return "5시~6시";
+  // 혹시 다른 값 들어오면 그냥 그대로
+  return `${raw}`;
+}
+
+// ===============================
 // 텍스트 생성
 // ===============================
 async function buildSignupText(channelId, guild) {
@@ -390,25 +406,27 @@ async function buildSignupText(channelId, guild) {
   const dw = await buildDisplayNames(guild, w);
 
   if (mode === "10") {
-    let text = "\n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n참가자 10명이 모이면 시작! \n만약 대기자가 많으면 20명 내전 진행\n\n";
+    const header = getHeaderForChannel(channelId, "10");
+    let text = `${header}\n\n`;
     text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
     if (w.length)
       text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
     return text;
   }
 
-  let text = "⚔️ 20명 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!\n\n";
+  const header = getHeaderForChannel(channelId, "20");
+  let text = `${header}\n\n`;
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
   return text;
 }
 
-// @everyone 멘션을 앞에 붙이는 헬퍼
+// @everyone 붙이는 헬퍼
 function applyEveryonePrefix(text) {
   return `@everyone ${text}`;
 }
 
 // ===============================
-// 메시지 업데이트 (명령어/크론에서만 사용)
+// 모집 메시지 업데이트 (명령어 / 크론에서 사용)
 // ===============================
 function safeUpdateSignupMessage(channelId) {
   if (!signupMessages.get(channelId)) return;
@@ -434,11 +452,13 @@ function safeUpdateSignupMessage(channelId) {
       const baseText = await buildSignupText(channelId, channel.guild);
       const newText = applyEveryonePrefix(baseText);
 
-      await msg.edit({
-        content: newText,
-        components: msg.components,
-        allowedMentions: { parse: ["everyone"] }
-      }).catch(() => {});
+      await msg
+        .edit({
+          content: newText,
+          components: msg.components,
+          allowedMentions: { parse: ["everyone"] }
+        })
+        .catch(() => {});
     } finally {
       if (messageUpdateLock.get(channelId) === "queued") {
         messageUpdateLock.set(channelId, true);
@@ -461,7 +481,19 @@ client.once("ready", async () => {
   const commands = [
     new SlashCommandBuilder()
       .setName("내전모집")
-      .setDescription("내전 참가 버튼 메시지 생성"),
+      .setDescription("내전 참가 버튼 메시지 생성")
+      .addStringOption((option) =>
+        option
+          .setName("time")
+          .setDescription("내전 시간 (예: 8시, 9시, 10시, 5시)")
+          .setRequired(false)
+          .addChoices(
+            { name: "8시", value: "8시" },
+            { name: "9시", value: "9시" },
+            { name: "10시", value: "10시" },
+            { name: "5시", value: "5시" }
+          )
+      ),
     new SlashCommandBuilder()
       .setName("내전멤버")
       .setDescription("현재 참가자 확인"),
@@ -480,9 +512,12 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("초기화")
       .setDescription("현재 참가자/대기자 및 시트 명단 초기화"),
-    new SlashCommandBuilder() // /내전코드
+    new SlashCommandBuilder()
       .setName("내전코드")
-      .setDescription("굴뚝 내전 BO3 토너먼트 코드를 생성합니다.")
+      .setDescription("굴뚝 내전 BO3 토너먼트 코드를 생성합니다."),
+    new SlashCommandBuilder() // ✅ /헬프 추가
+      .setName("헬프")
+      .setDescription("내전 인원이 없을 때 사람을 불러 모읍니다.")
   ].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
@@ -517,7 +552,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isChatInputCommand()) {
       const { commandName } = interaction;
 
-      // ✅ 굴뚝딱가리 관련 모든 명령어는 내전-모집 채널에서만 사용
+      // 내전 관련 채널 제한
       if (channelId !== ALLOWED_CHANNEL_ID) {
         return interaction.reply({
           content: `이 명령어는 <#${ALLOWED_CHANNEL_ID}> 채널에서만 사용할 수 있습니다.`,
@@ -582,6 +617,24 @@ client.on("interactionCreate", async (interaction) => {
       if (commandName === "내전모집") {
         await syncFromSheet(channelId);
 
+        const inputTime = interaction.options.getString("time");
+        const timeRange = inputTime ? getTimeRangeLabel(inputTime) : null;
+
+        if (timeRange) {
+          // 8시~9시 형식 헤더
+          const header =
+            `⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
+            "참가자 10명이 모이면 시작! \n" +
+            "만약 대기자가 많으면 20명 내전 진행";
+          signupHeaderMap.set(channelId, header);
+        } else {
+          // 기본 헤더
+          signupHeaderMap.set(
+            channelId,
+            getDefaultHeaderForMode("10")
+          );
+        }
+
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId("signup")
@@ -612,8 +665,7 @@ client.on("interactionCreate", async (interaction) => {
         const sent = await interaction.fetchReply();
         signupMessages.set(channelId, sent.id);
 
-        // ✅ 오늘 수동으로 /내전모집이 실행되었음을 기록 (KST 기준)
-        //   - 메모리 + 구글 시트에 모두 기록
+        // 오늘 수동 /내전모집 실행 기록
         setLastManualRecruitDateToToday().catch(() => {});
       }
 
@@ -659,6 +711,9 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, merged);
           waitlists.set(channelId, []);
 
+          // 20모드 헤더 기본값으로
+          signupHeaderMap.set(channelId, getDefaultHeaderForMode("20"));
+
           await interaction.reply({
             content: "20모드로 전환되었습니다!",
             ephemeral: true
@@ -690,6 +745,9 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, p10);
           waitlists.set(channelId, w);
 
+          // 10모드 기본 헤더로
+          signupHeaderMap.set(channelId, getDefaultHeaderForMode("10"));
+
           await interaction.reply({
             content: "10모드로 전환되었습니다!",
             ephemeral: true
@@ -700,7 +758,7 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // /시작 — 실제 멘션 알림
+      // /시작
       else if (commandName === "시작") {
         const p = participantsMap.get(channelId) || [];
         if (!p.length) {
@@ -775,21 +833,27 @@ client.on("interactionCreate", async (interaction) => {
           ephemeral: true
         });
       }
+
+      // ✅ /헬프
+      else if (commandName === "헬프") {
+        return interaction.reply({
+          content:
+            "@everyone 내전 사람이 없어요 아무나 아는 사람 좀 불러주세요~~",
+          allowedMentions: { parse: ["everyone"] }
+        });
+      }
     }
 
     // ------------------------------
     // Button (참가/취소)
-    // ------------------------------
+// ------------------------------
     else if (interaction.isButton()) {
-      // 1) 바로 ACK
       try {
         await interaction.deferUpdate();
       } catch {
         return;
       }
 
-      // 봇 재시작된 뒤 기존 메시지 버튼을 눌렀을 수도 있으므로,
-      // 메모리에 데이터가 없으면 시트에서 한 번 동기화해 온다.
       if (!participantsMap.has(channelId) || !waitlists.has(channelId)) {
         try {
           await syncFromSheet(channelId);
@@ -863,7 +927,6 @@ client.on("interactionCreate", async (interaction) => {
       participantsMap.set(channelId, p);
       waitlists.set(channelId, w);
 
-      // 3) 모집 메시지 내용 갱신
       if (needUpdate) {
         try {
           const baseText = await buildSignupText(channelId, interaction.guild);
@@ -878,7 +941,6 @@ client.on("interactionCreate", async (interaction) => {
         syncParticipantsToSheet(channelId).catch(() => {});
       }
 
-      // 4) 에페메랄 안내
       try {
         await interaction.followUp({
           content: replyText || "처리 중 오류가 발생했습니다.",
@@ -905,16 +967,13 @@ cron.schedule(
 
       await acquireLock();
       try {
-        // 메모리 상 참가자/대기자 초기화
         participantsMap.set(channelId, []);
         waitlists.set(channelId, []);
-        // 구글 시트 관련 범위 전체 초기화
         await clearDailySheetAll();
       } finally {
         releaseLock();
       }
 
-      // 기존 모집 메시지가 있다면 내용만 "빈 상태"로 갱신 (알림/멘션 없음)
       const msgId = signupMessages.get(channelId);
       if (!msgId) return;
 
@@ -929,7 +988,7 @@ cron.schedule(
         .edit({
           content: baseText,
           components: msg.components,
-          allowedMentions: { parse: [] } // @everyone 멘션 안 날리도록
+          allowedMentions: { parse: [] } // 8시 초기화는 everyone 안 날림
         })
         .catch(() => {});
     } catch (e) {
@@ -951,13 +1010,11 @@ cron.schedule(
 
       const todayKST = getTodayKSTString();
 
-      // ✅ 시트에서 마지막 수동 /내전모집 실행 날짜를 읽어와서 메모리에 동기화
       const sheetDate = await getLastManualRecruitDateFromSheet();
       if (sheetDate) {
         lastManualRecruitDate = sheetDate;
       }
 
-      // ✅ 오늘 이미 수동으로 /내전모집을 쓴 경우 자동 모집 건너뜀
       if (lastManualRecruitDate === todayKST) {
         console.log(
           "[자동 모집] 오늘 이미 수동 /내전모집이 실행되어 자동 모집을 건너뜁니다."
@@ -989,6 +1046,9 @@ cron.schedule(
           .setLabel("취소")
           .setStyle(ButtonStyle.Danger)
       );
+
+      // 자동 모집은 항상 기본 헤더 사용
+      signupHeaderMap.set(channelId, getDefaultHeaderForMode("10"));
 
       const baseText = await buildSignupText(channelId, channel.guild);
 
