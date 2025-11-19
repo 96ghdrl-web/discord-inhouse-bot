@@ -170,6 +170,10 @@ const modeMap = new Map();          // 채널별 모드("10" | "20")
 const messageUpdateLock = new Map();// 메시지 업데이트 락
 const signupHeaderMap = new Map();  // 채널별 헤더 문구
 
+// 라인 배치 정보 (채널별)
+// { mode: "10"|"20", top:[], jg:[], mid:[], adc:[], sup:[] }
+const laneMap = new Map();
+
 // Sheet I/O Lock
 let sheetLock = false;
 
@@ -247,6 +251,92 @@ async function clearDailySheetAll() {
   await clearRange(RANGE_20P, 20, 1);
 }
 
+// lane helpers (10모드)
+async function getLane10FromSheet() {
+  const vals = await readRange(RANGE_TEAM_10); // 2 x 5
+  const r0 = (vals[0] || []);
+  const r1 = (vals[1] || []);
+  const get = (row, idx) => (row[idx] || "").trim();
+  return {
+    mode: "10",
+    top: [get(r0, 0), get(r1, 0)],
+    jg:  [get(r0, 1), get(r1, 1)],
+    mid: [get(r0, 2), get(r1, 2)],
+    adc: [get(r0, 3), get(r1, 3)],
+    sup: [get(r0, 4), get(r1, 4)]
+  };
+}
+
+async function setLane10ToSheet(lane) {
+  const rows = [
+    [
+      lane.top[0] || "",
+      lane.jg[0] || "",
+      lane.mid[0] || "",
+      lane.adc[0] || "",
+      lane.sup[0] || ""
+    ],
+    [
+      lane.top[1] || "",
+      lane.jg[1] || "",
+      lane.mid[1] || "",
+      lane.adc[1] || "",
+      lane.sup[1] || ""
+    ]
+  ];
+  await writeRange(RANGE_TEAM_10, rows);
+}
+
+// lane helpers (20모드)
+async function getLane20FromSheet() {
+  const vals = await readRange(RANGE_TEAM_20); // 4 x 5
+  const r = [];
+  for (let i = 0; i < 4; i++) r.push(vals[i] || []);
+  const get = (row, idx) => (row[idx] || "").trim();
+  return {
+    mode: "20",
+    top: [get(r[0], 0), get(r[1], 0), get(r[2], 0), get(r[3], 0)],
+    jg:  [get(r[0], 1), get(r[1], 1), get(r[2], 1), get(r[3], 1)],
+    mid: [get(r[0], 2), get(r[1], 2), get(r[2], 2), get(r[3], 2)],
+    adc: [get(r[0], 3), get(r[1], 3), get(r[2], 3), get(r[3], 3)],
+    sup: [get(r[0], 4), get(r[1], 4), get(r[2], 4), get(r[3], 4)]
+  };
+}
+
+async function setLane20ToSheet(lane) {
+  const rows = [
+    [
+      lane.top[0] || "",
+      lane.jg[0] || "",
+      lane.mid[0] || "",
+      lane.adc[0] || "",
+      lane.sup[0] || ""
+    ],
+    [
+      lane.top[1] || "",
+      lane.jg[1] || "",
+      lane.mid[1] || "",
+      lane.adc[1] || "",
+      lane.sup[1] || ""
+    ],
+    [
+      lane.top[2] || "",
+      lane.jg[2] || "",
+      lane.mid[2] || "",
+      lane.adc[2] || "",
+      lane.sup[2] || ""
+    ],
+    [
+      lane.top[3] || "",
+      lane.jg[3] || "",
+      lane.mid[3] || "",
+      lane.adc[3] || "",
+      lane.sup[3] || ""
+    ]
+  ];
+  await writeRange(RANGE_TEAM_20, rows);
+}
+
 // ✅ 수동 /내전모집 날짜 시트에서 읽기
 async function getLastManualRecruitDateFromSheet() {
   try {
@@ -281,19 +371,23 @@ async function setLastManualRecruitDateToToday() {
   lastManualRecruitDate = today;
 }
 
-async function syncParticipantsToSheet(channelId) {
+// 참가자 + 라인 정보를 시트에 동기화
+async function syncAllToSheet(channelId) {
   await acquireLock();
   try {
     const mode = getMode(channelId);
     const p = participantsMap.get(channelId) || [];
+    const lane = getLaneState(channelId);
 
     if (mode === "10") {
       await set10pList(p);
+      await setLane10ToSheet(lane);
     } else {
       await set20pList(p);
+      await setLane20ToSheet(lane);
     }
   } catch (e) {
-    console.error("syncParticipantsToSheet error:", e);
+    console.error("syncAllToSheet error:", e);
   } finally {
     releaseLock();
   }
@@ -306,16 +400,47 @@ function getMode(channelId) {
   return modeMap.get(channelId) || "10";
 }
 
+// lane 기본 상태 생성
+function createEmptyLaneState(mode) {
+  const cap = mode === "10" ? 2 : 4;
+  const make = () => Array(cap).fill("");
+  return {
+    mode,
+    top: make(),
+    jg: make(),
+    mid: make(),
+    adc: make(),
+    sup: make()
+  };
+}
+
+// lane 상태 가져오기 (없으면 생성)
+function getLaneState(channelId) {
+  const mode = getMode(channelId);
+  let st = laneMap.get(channelId);
+  const needNew = !st || st.mode !== mode;
+  if (needNew) {
+    st = createEmptyLaneState(mode);
+    laneMap.set(channelId, st);
+  }
+  return st;
+}
+
+// 시트 → 메모리 동기화
 async function syncFromSheet(channelId) {
   const mode = getMode(channelId);
 
   if (mode === "10") {
     const list10 = await get10pList();
+    const lane10 = await getLane10FromSheet();
     participantsMap.set(channelId, list10);
+    laneMap.set(channelId, lane10);
     if (!waitlists.has(channelId)) waitlists.set(channelId, []);
   } else {
     const list20 = await get20pList();
+    const lane20 = await getLane20FromSheet();
     participantsMap.set(channelId, list20);
+    laneMap.set(channelId, lane20);
     if (!waitlists.has(channelId)) waitlists.set(channelId, []);
   }
 }
@@ -366,13 +491,13 @@ async function buildMentionsForNames(guild, names) {
 function getDefaultHeaderForMode(mode) {
   if (mode === "10") {
     return (
-      "⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n" +
-      "참가자 10명이 모이면 시작! \n" +
+      "⚔️ 오늘 내전 모집합니다~~ ⚔️\n" +
+      "참가자 10명이 모이면 시작!\n" +
       "만약 대기자가 많으면 20명 내전 진행"
     );
   }
   // 20 모드 기본 헤더
-  return "⚔️ 20명 내전 모집중 !! 참가하실 분은 아래 버튼을 눌러주세요!";
+  return "⚔️ 오늘 20명 내전 모집합니다~~ ⚔️";
 }
 
 function getHeaderForChannel(channelId, mode) {
@@ -393,32 +518,81 @@ function getTimeRangeLabel(raw) {
 // ===============================
 // 텍스트 생성
 // ===============================
+function joinSlots(arr) {
+  return arr.map((x) => x || "").join(" / ");
+}
+
 async function buildSignupText(channelId, guild) {
   const mode = getMode(channelId);
   const p = participantsMap.get(channelId) || [];
   const w = waitlists.get(channelId) || [];
+  const lane = getLaneState(channelId);
 
   const dp = await buildDisplayNames(guild, p);
   const dw = await buildDisplayNames(guild, w);
 
-  if (mode === "10") {
-    const header = getHeaderForChannel(channelId, "10");
-    let text = `${header}\n\n`;
-    text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
-    if (w.length)
-      text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
-    return text;
-  }
+  const header = getHeaderForChannel(channelId, mode);
 
-  const header = getHeaderForChannel(channelId, "20");
   let text = `${header}\n\n`;
+
+  // 라인 표시
+  text += `탑 : ${joinSlots(lane.top)}\n`;
+  text += `정글 : ${joinSlots(lane.jg)}\n`;
+  text += `미드 : ${joinSlots(lane.mid)}\n`;
+  text += `원딜 : ${joinSlots(lane.adc)}\n`;
+  text += `서폿 : ${joinSlots(lane.sup)}\n`;
+  text += `[탑] [정글] [미드] [원딜] [서폿]\n[라인 상관 없음] [취소]\n\n`;
+
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
+  if (w.length) text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
+
   return text;
 }
 
 // @everyone 붙이는 헬퍼 (멘션 후 줄바꿈)
 function applyEveryonePrefix(text) {
   return `@everyone\n${text}`;
+}
+
+// ===============================
+// 버튼 컴포넌트 생성
+// ===============================
+function createLaneButtons() {
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lane_top")
+      .setLabel("탑")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("lane_jg")
+      .setLabel("정글")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("lane_mid")
+      .setLabel("미드")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("lane_adc")
+      .setLabel("원딜")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("lane_sup")
+      .setLabel("서폿")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lane_any")
+      .setLabel("라인 상관 없음")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("cancel")
+      .setLabel("취소")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  return [row1, row2];
 }
 
 // ===============================
@@ -614,33 +788,32 @@ client.on("interactionCreate", async (interaction) => {
       if (commandName === "내전모집") {
         await syncFromSheet(channelId);
 
+        const mode = getMode(channelId);
         const inputTime = interaction.options.getString("time");
         const timeRange = inputTime ? getTimeRangeLabel(inputTime) : null;
 
         if (timeRange) {
-          const header =
-            `⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
-            "참가자 10명이 모이면 시작! \n" +
-            "만약 대기자가 많으면 20명 내전 진행";
-          signupHeaderMap.set(channelId, header);
+          if (mode === "10") {
+            const header =
+              `⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
+              "참가자 10명이 모이면 시작!\n" +
+              "만약 대기자가 많으면 20명 내전 진행";
+            signupHeaderMap.set(channelId, header);
+          } else {
+            const header = `⚔️ ${timeRange} 20명 내전 모집합니다~~ ⚔️`;
+            signupHeaderMap.set(channelId, header);
+          }
         } else {
           signupHeaderMap.set(
             channelId,
-            getDefaultHeaderForMode("10")
+            getDefaultHeaderForMode(mode)
           );
         }
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("signup")
-            .setLabel("참가")
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId("cancel")
-            .setLabel("취소")
-            .setStyle(ButtonStyle.Danger)
-        );
+        // 라인 상태 초기화 (새 모집 시작 시)
+        laneMap.set(channelId, createEmptyLaneState(mode));
 
+        const components = createLaneButtons();
         const baseText = await buildSignupText(channelId, interaction.guild);
 
         const prevId = signupMessages.get(channelId);
@@ -653,7 +826,7 @@ client.on("interactionCreate", async (interaction) => {
 
         await interaction.reply({
           content: applyEveryonePrefix(baseText),
-          components: [row],
+          components,
           allowedMentions: { parse: ["everyone"] }
         });
 
@@ -677,7 +850,7 @@ client.on("interactionCreate", async (interaction) => {
 
         let t = `현재 모드: ${mode}\n\n`;
         t += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
-        if (mode === "10" && w.length)
+        if (w.length)
           t += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
 
         await interaction.reply({ content: t, ephemeral: true });
@@ -693,6 +866,7 @@ client.on("interactionCreate", async (interaction) => {
               ephemeral: true
             });
 
+          // 참가자 목록은 기존 로직대로 20명까지로 합치기
           await syncFromSheet(channelId);
           const p = participantsMap.get(channelId) || [];
           const w = waitlists.get(channelId) || [];
@@ -706,7 +880,10 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, merged);
           waitlists.set(channelId, []);
 
-          // 20모드 헤더 기본값으로
+          // 20모드 라인/헤더 초기화
+          const emptyLane = createEmptyLaneState("20");
+          laneMap.set(channelId, emptyLane);
+          await setLane20ToSheet(emptyLane);
           signupHeaderMap.set(channelId, getDefaultHeaderForMode("20"));
 
           await interaction.reply({
@@ -740,7 +917,9 @@ client.on("interactionCreate", async (interaction) => {
           participantsMap.set(channelId, p10);
           waitlists.set(channelId, w);
 
-          // 10모드 기본 헤더로
+          const emptyLane = createEmptyLaneState("10");
+          laneMap.set(channelId, emptyLane);
+          await setLane10ToSheet(emptyLane);
           signupHeaderMap.set(channelId, getDefaultHeaderForMode("10"));
 
           await interaction.reply({
@@ -807,10 +986,10 @@ client.on("interactionCreate", async (interaction) => {
       else if (commandName === "초기화") {
         await acquireLock();
         try {
-          await set10pList([]);
-          await set20pList([]);
+          await clearDailySheetAll();
           participantsMap.set(channelId, []);
           waitlists.set(channelId, []);
+          laneMap.set(channelId, createEmptyLaneState(getMode(channelId)));
         } catch (e) {
           console.error("/초기화 error:", e);
           return interaction.reply({
@@ -840,8 +1019,8 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ------------------------------
-    // Button (참가/취소)
-    // ------------------------------
+    // Button (라인/취소)
+// ------------------------------
     else if (interaction.isButton()) {
       try {
         await interaction.deferUpdate();
@@ -864,8 +1043,11 @@ client.on("interactionCreate", async (interaction) => {
       let needUpdate = false;
 
       const mode = getMode(channelId);
+      const cap = mode === "10" ? 10 : 20;
+
       const p = participantsMap.get(channelId) || [];
       const w = waitlists.get(channelId) || [];
+      const lane = getLaneState(channelId);
 
       const member = interaction.member;
       const userName = getMemberDisplayName(member);
@@ -873,54 +1055,84 @@ client.on("interactionCreate", async (interaction) => {
       if (!userName) {
         replyText = "사용자 정보를 불러올 수 없습니다.";
       } else {
-        if (interaction.customId === "signup") {
-          if (p.includes(userName) || w.includes(userName)) {
-            replyText = "이미 신청한 상태입니다.";
-          } else {
-            if (mode === "10") {
-              if (p.length < 10) {
-                p.push(userName);
-                replyText = "참가 완료!";
-              } else {
-                w.push(userName);
-                replyText = "정원 초과로 대기자로 등록되었습니다.";
-              }
-            } else {
-              if (p.length >= 20) {
-                replyText = "20명 정원이 가득 찼습니다.";
-              } else {
-                p.push(userName);
-                replyText = "참가 완료!";
-              }
-            }
-            needUpdate = true;
-          }
-        } else if (interaction.customId === "cancel") {
+        const id = interaction.customId;
+
+        // 취소 버튼
+        if (id === "cancel") {
           const oldP = p.length;
           const oldW = w.length;
 
+          // 참가자/대기자 제거
           const idxP = p.indexOf(userName);
           if (idxP !== -1) p.splice(idxP, 1);
           const idxW = w.indexOf(userName);
           if (idxW !== -1) w.splice(idxW, 1);
 
+          // 라인에서 제거
+          ["top", "jg", "mid", "adc", "sup"].forEach((key) => {
+            const arr = lane[key];
+            for (let i = 0; i < arr.length; i++) {
+              if (arr[i] === userName) arr[i] = "";
+            }
+          });
+
           if (p.length === oldP && w.length === oldW) {
             replyText = "신청 기록이 없습니다.";
           } else {
-            if (mode === "10") {
-              if (p.length < 10 && w.length > 0) {
-                const moved = w.shift();
-                if (moved) p.push(moved);
-              }
+            // 정원 여유가 있고 대기자가 있다면 1명 승급 (라인은 비워둠)
+            if (p.length < cap && w.length > 0) {
+              const moved = w.shift();
+              if (moved) p.push(moved);
             }
             replyText = "신청이 취소되었습니다!";
             needUpdate = true;
+          }
+        }
+        // 라인/라인 상관없음 버튼
+        else if (id.startsWith("lane_")) {
+          if (p.includes(userName) || w.includes(userName)) {
+            replyText = "이미 신청한 상태입니다.";
+          } else {
+            const laneKey = id.replace("lane_", ""); // top/jg/mid/adc/sup/any
+
+            // 전체 인원 꽉 찼으면 무조건 대기자
+            if (p.length >= cap) {
+              w.push(userName);
+              replyText = "정원 초과로 대기자로 등록되었습니다.";
+              needUpdate = true;
+            } else if (laneKey === "any") {
+              // 라인 상관 없음 → 라인에는 안 넣고 참가자만
+              p.push(userName);
+              replyText = "참가 완료!";
+              needUpdate = true;
+            } else {
+              // 특정 라인
+              const laneLabelMap = {
+                top: "탑",
+                jg: "정글",
+                mid: "미드",
+                adc: "원딜",
+                sup: "서폿"
+              };
+              const arr = lane[laneKey];
+
+              const emptyIdx = arr.findIndex((x) => !x);
+              if (emptyIdx === -1) {
+                replyText = `${laneLabelMap[laneKey]} 자리가 가득 찼습니다. 다른 라인을 선택해주세요.`;
+              } else {
+                arr[emptyIdx] = userName;
+                p.push(userName);
+                replyText = "참가 완료!";
+                needUpdate = true;
+              }
+            }
           }
         }
       }
 
       participantsMap.set(channelId, p);
       waitlists.set(channelId, w);
+      laneMap.set(channelId, lane);
 
       if (needUpdate) {
         try {
@@ -933,7 +1145,7 @@ client.on("interactionCreate", async (interaction) => {
         } catch (e) {
           console.error("button message.edit error:", e);
         }
-        syncParticipantsToSheet(channelId).catch(() => {});
+        syncAllToSheet(channelId).catch(() => {});
       }
 
       try {
@@ -964,6 +1176,7 @@ cron.schedule(
       try {
         participantsMap.set(channelId, []);
         waitlists.set(channelId, []);
+        laneMap.set(channelId, createEmptyLaneState(getMode(channelId)));
         await clearDailySheetAll();
       } finally {
         releaseLock();
@@ -1022,6 +1235,9 @@ cron.schedule(
         modeMap.set(channelId, "10");
         await set10pList([]);
         await set20pList([]);
+        const emptyLane10 = createEmptyLaneState("10");
+        laneMap.set(channelId, emptyLane10);
+        await setLane10ToSheet(emptyLane10);
         participantsMap.set(channelId, []);
         waitlists.set(channelId, []);
       } finally {
@@ -1031,18 +1247,7 @@ cron.schedule(
       const channel = await client.channels.fetch(channelId).catch(() => null);
       if (!channel || !channel.isTextBased()) return;
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("signup")
-          .setLabel("참가")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("cancel")
-          .setLabel("취소")
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      // 자동 모집은 항상 기본 헤더 사용
+      const components = createLaneButtons();
       signupHeaderMap.set(channelId, getDefaultHeaderForMode("10"));
 
       const baseText = await buildSignupText(channelId, channel.guild);
@@ -1055,7 +1260,7 @@ cron.schedule(
 
       const msg = await channel.send({
         content: applyEveryonePrefix(baseText),
-        components: [row],
+        components,
         allowedMentions: { parse: ["everyone"] }
       });
 
