@@ -89,6 +89,9 @@ const RANGE_20P = `${SHEET_NAME}!L18:L37`;
 const RANGE_TEAM_10 = `${SHEET_NAME}!E4:I5`;
 const RANGE_TEAM_20 = `${SHEET_NAME}!E18:I21`;
 
+// ✅ 수동 /내전모집 실행 날짜를 저장할 메타 셀 (웬만하면 안 쓰는 영역 사용)
+const RANGE_LAST_MANUAL = `${SHEET_NAME}!Z1`;
+
 // ===============================
 // Riot Tournament (stub) 설정
 // ===============================
@@ -257,6 +260,40 @@ async function clearDailySheetAll() {
   await clearRange(RANGE_TEAM_20, 4, 5);   // E18:I21
   await clearRange(RANGE_10P, 10, 1);      // L5:L14
   await clearRange(RANGE_20P, 20, 1);      // L18:L37
+}
+
+// ✅ 수동 /내전모집 실행 날짜를 시트에서 읽기
+async function getLastManualRecruitDateFromSheet() {
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: RANGE_LAST_MANUAL
+    });
+    const values = res.data.values || [];
+    if (values[0] && values[0][0]) {
+      return String(values[0][0]).trim();
+    }
+    return null;
+  } catch (e) {
+    console.error("getLastManualRecruitDateFromSheet error:", e);
+    return null;
+  }
+}
+
+// ✅ 오늘 날짜를 시트에 기록
+async function setLastManualRecruitDateToToday() {
+  const today = getTodayKSTString();
+  try {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: RANGE_LAST_MANUAL,
+      valueInputOption: "RAW",
+      requestBody: { values: [[today]] }
+    });
+  } catch (e) {
+    console.error("setLastManualRecruitDateToToday error:", e);
+  }
+  lastManualRecruitDate = today;
 }
 
 // 참가자 목록을 시트에 동기화 (버튼 클릭 후 백그라운드에서 호출)
@@ -576,7 +613,8 @@ client.on("interactionCreate", async (interaction) => {
         signupMessages.set(channelId, sent.id);
 
         // ✅ 오늘 수동으로 /내전모집이 실행되었음을 기록 (KST 기준)
-        lastManualRecruitDate = getTodayKSTString();
+        //   - 메모리 + 구글 시트에 모두 기록
+        setLastManualRecruitDateToToday().catch(() => {});
       }
 
       // /내전멤버
@@ -911,8 +949,15 @@ cron.schedule(
       const channelId = CHANNEL_ID;
       if (!channelId) return;
 
-      // ✅ 오늘 이미 수동으로 /내전모집을 쓴 경우 자동 모집 건너뜀
       const todayKST = getTodayKSTString();
+
+      // ✅ 시트에서 마지막 수동 /내전모집 실행 날짜를 읽어와서 메모리에 동기화
+      const sheetDate = await getLastManualRecruitDateFromSheet();
+      if (sheetDate) {
+        lastManualRecruitDate = sheetDate;
+      }
+
+      // ✅ 오늘 이미 수동으로 /내전모집을 쓴 경우 자동 모집 건너뜀
       if (lastManualRecruitDate === todayKST) {
         console.log(
           "[자동 모집] 오늘 이미 수동 /내전모집이 실행되어 자동 모집을 건너뜁니다."
