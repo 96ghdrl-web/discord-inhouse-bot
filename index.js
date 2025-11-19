@@ -528,8 +528,9 @@ async function buildSignupText(channelId, guild) {
   const w = waitlists.get(channelId) || [];
   const lane = getLaneState(channelId);
 
-  const dp = await buildDisplayNames(guild, p);
-  const dw = await buildDisplayNames(guild, w);
+  // ✅ 속도 위해: 디스코드에서 멤버 fetch 안 하고, 저장된 이름 그대로 사용
+  const dp = p;
+  const dw = w;
 
   const header = getHeaderForChannel(channelId, mode);
 
@@ -542,7 +543,7 @@ async function buildSignupText(channelId, guild) {
   text += `원딜 : ${joinSlots(lane.adc)}\n`;
   text += `서폿 : ${joinSlots(lane.sup)}\n\n`;
 
-  // 참가자/대기자 블록은 항상 제일 아래
+  // 참가자/대기자 블록은 항상 제일 아래 + 0명도 표시
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
   text += `\n\n대기자 (${w.length}명):\n${w.length ? dw.join(" ") : "없음"}`;
 
@@ -786,6 +787,9 @@ client.on("interactionCreate", async (interaction) => {
 
       // /내전모집
       if (commandName === "내전모집") {
+        // ✅ 먼저 deferReply 해서 3초 제한 피함
+        await interaction.deferReply({ ephemeral: false });
+
         await syncFromSheet(channelId);
 
         const mode = getMode(channelId);
@@ -824,13 +828,12 @@ client.on("interactionCreate", async (interaction) => {
           if (prev) prev.delete().catch(() => {});
         }
 
-        await interaction.reply({
+        const sent = await interaction.editReply({
           content: applyEveryonePrefix(baseText),
           components,
           allowedMentions: { parse: ["everyone"] }
         });
 
-        const sent = await interaction.fetchReply();
         signupMessages.set(channelId, sent.id);
 
         // 오늘 수동 /내전모집 실행 기록
@@ -1019,7 +1022,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // ------------------------------
     // Button (라인/취소)
-// ------------------------------
+    // ------------------------------
     else if (interaction.isButton()) {
       try {
         await interaction.deferUpdate();
@@ -1027,16 +1030,8 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
-      if (!participantsMap.has(channelId) || !waitlists.has(channelId)) {
-        try {
-          await syncFromSheet(channelId);
-        } catch (e) {
-          console.error("버튼 처리 중 시트 동기화 오류:", e);
-          if (!participantsMap.has(channelId)) participantsMap.set(channelId, []);
-          if (!waitlists.has(channelId)) waitlists.set(channelId, []);
-        }
-        if (!waitlists.has(channelId)) waitlists.set(channelId, []);
-      }
+      // ✅ 버튼에서는 더 이상 syncFromSheet 호출 안 함
+      //    → 전부 메모리 상태 기준으로만 처리 (속도 최우선)
 
       let replyText = "";
       let needUpdate = false;
@@ -1188,6 +1183,7 @@ client.on("interactionCreate", async (interaction) => {
         } catch (e) {
           console.error("button message.edit error:", e);
         }
+        // ✅ 시트 동기화는 백그라운드에서만 (속도 저하 방지)
         syncAllToSheet(channelId).catch(() => {});
       }
 
