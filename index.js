@@ -366,7 +366,7 @@ async function buildMentionsForNames(guild, names) {
 function getDefaultHeaderForMode(mode) {
   if (mode === "10") {
     return (
-      "\n⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n" +
+      "⚔️ 오늘 내전 참가하실 분은 아래 버튼을 눌러주세요!\n" +
       "참가자 10명이 모이면 시작! \n" +
       "만약 대기자가 많으면 20명 내전 진행"
     );
@@ -381,17 +381,13 @@ function getHeaderForChannel(channelId, mode) {
   return getDefaultHeaderForMode(mode);
 }
 
-// "8시" → "8시~9시" 등으로 변환
+// "0" → "0시~1시" 일반화 (0~23 대응)
 function getTimeRangeLabel(raw) {
-  if (!raw) return null;
-  const cleaned = raw.toString().replace("시", "").trim();
-  const hour = parseInt(cleaned, 10);
-  if (hour === 8) return "8시~9시";
-  if (hour === 9) return "9시~10시";
-  if (hour === 10) return "10시~11시";
-  if (hour === 5 || hour === 17) return "5시~6시";
-  // 혹시 다른 값 들어오면 그냥 그대로
-  return `${raw}`;
+  if (raw === null || raw === undefined) return null;
+  const hour = parseInt(raw, 10);
+  if (Number.isNaN(hour)) return null;
+  const next = (hour + 1) % 24;
+  return `${hour}시~${next}시`;
 }
 
 // ===============================
@@ -420,9 +416,9 @@ async function buildSignupText(channelId, guild) {
   return text;
 }
 
-// @everyone 붙이는 헬퍼
+// @everyone 붙이는 헬퍼 (멘션 후 줄바꿈)
 function applyEveryonePrefix(text) {
-  return `@everyone ${text}`;
+  return `@everyone\n${text}`;
 }
 
 // ===============================
@@ -478,22 +474,23 @@ function safeUpdateSignupMessage(channelId) {
 client.once("ready", async () => {
   console.log(`로그인 성공: ${client.user.tag}`);
 
+  const timeChoices = [];
+  for (let h = 0; h <= 12; h++) {
+    timeChoices.push({ name: `${h}시`, value: String(h) });
+  }
+
   const commands = [
     new SlashCommandBuilder()
       .setName("내전모집")
       .setDescription("내전 참가 버튼 메시지 생성")
-      .addStringOption((option) =>
-        option
+      .addStringOption((option) => {
+        let opt = option
           .setName("time")
-          .setDescription("내전 시간 (예: 8시, 9시, 10시, 5시)")
-          .setRequired(false)
-          .addChoices(
-            { name: "8시", value: "8시" },
-            { name: "9시", value: "9시" },
-            { name: "10시", value: "10시" },
-            { name: "5시", value: "5시" }
-          )
-      ),
+          .setDescription("내전 시작 시간 (0시~12시)")
+          .setRequired(false);
+        timeChoices.forEach((c) => (opt = opt.addChoices(c)));
+        return opt;
+      }),
     new SlashCommandBuilder()
       .setName("내전멤버")
       .setDescription("현재 참가자 확인"),
@@ -515,7 +512,7 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("내전코드")
       .setDescription("굴뚝 내전 BO3 토너먼트 코드를 생성합니다."),
-    new SlashCommandBuilder() // ✅ /헬프 추가
+    new SlashCommandBuilder() // /헬프
       .setName("헬프")
       .setDescription("내전 인원이 없을 때 사람을 불러 모읍니다.")
   ].map((c) => c.toJSON());
@@ -621,14 +618,12 @@ client.on("interactionCreate", async (interaction) => {
         const timeRange = inputTime ? getTimeRangeLabel(inputTime) : null;
 
         if (timeRange) {
-          // 8시~9시 형식 헤더
           const header =
-            `\n⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
+            `⚔️ ${timeRange} 내전 모집합니다~~ ⚔️\n` +
             "참가자 10명이 모이면 시작! \n" +
             "만약 대기자가 많으면 20명 내전 진행";
           signupHeaderMap.set(channelId, header);
         } else {
-          // 기본 헤더
           signupHeaderMap.set(
             channelId,
             getDefaultHeaderForMode("10")
@@ -834,7 +829,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // ✅ /헬프
+      // /헬프
       else if (commandName === "헬프") {
         return interaction.reply({
           content:
@@ -846,7 +841,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // ------------------------------
     // Button (참가/취소)
-// ------------------------------
+    // ------------------------------
     else if (interaction.isButton()) {
       try {
         await interaction.deferUpdate();
