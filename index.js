@@ -542,8 +542,9 @@ async function buildSignupText(channelId, guild) {
   text += `원딜 : ${joinSlots(lane.adc)}\n`;
   text += `서폿 : ${joinSlots(lane.sup)}\n\n`;
 
+  // 참가자/대기자 블록은 항상 제일 아래
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
-  if (w.length) text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
+  text += `\n\n대기자 (${w.length}명):\n${w.length ? dw.join(" ") : "없음"}`;
 
   return text;
 }
@@ -849,8 +850,7 @@ client.on("interactionCreate", async (interaction) => {
 
         let t = `현재 모드: ${mode}\n\n`;
         t += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
-        if (w.length)
-          t += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
+        t += `\n\n대기자 (${w.length}명):\n${w.length ? dw.join(" ") : "없음"}`;
 
         await interaction.reply({ content: t, ephemeral: true });
       }
@@ -1089,41 +1089,85 @@ client.on("interactionCreate", async (interaction) => {
         }
         // 라인/라인 상관없음 버튼
         else if (id.startsWith("lane_")) {
-          if (p.includes(userName) || w.includes(userName)) {
-            replyText = "이미 신청한 상태입니다.";
-          } else {
-            const laneKey = id.replace("lane_", ""); // top/jg/mid/adc/sup/any
+          const laneKey = id.replace("lane_", ""); // top/jg/mid/adc/sup/any
+          const isParticipant = p.includes(userName);
+          const isWait = w.includes(userName);
 
-            // 전체 인원 꽉 찼으면 무조건 대기자
-            if (p.length >= cap) {
-              w.push(userName);
-              replyText = "정원 초과로 대기자로 등록되었습니다.";
-              needUpdate = true;
-            } else if (laneKey === "any") {
-              // 라인 상관 없음 → 라인에는 안 넣고 참가자만
-              p.push(userName);
-              replyText = "참가 완료!";
-              needUpdate = true;
-            } else {
-              // 특정 라인
-              const laneLabelMap = {
-                top: "탑",
-                jg: "정글",
-                mid: "미드",
-                adc: "원딜",
-                sup: "서폿"
-              };
-              const arr = lane[laneKey];
+          const removeFromAllLanes = () => {
+            ["top", "jg", "mid", "adc", "sup"].forEach((key) => {
+              const arr = lane[key];
+              for (let i = 0; i < arr.length; i++) {
+                if (arr[i] === userName) arr[i] = "";
+              }
+            });
+          };
 
-              const emptyIdx = arr.findIndex((x) => !x);
-              if (emptyIdx === -1) {
-                replyText = `${laneLabelMap[laneKey]} 자리가 가득 찼습니다. 다른 라인을 선택해주세요.`;
+          // 대기자만인 경우: 라인 선택 불가
+          if (!isParticipant && isWait) {
+            replyText = "대기자는 라인을 선택할 수 없습니다.";
+          } else if (laneKey === "any") {
+            // 라인 상관 없음
+            if (!isParticipant && !isWait) {
+              // 새 유저
+              if (p.length >= cap) {
+                w.push(userName);
+                replyText = "정원 초과로 대기자로 등록되었습니다.";
               } else {
-                arr[emptyIdx] = userName;
                 p.push(userName);
                 replyText = "참가 완료!";
+              }
+              needUpdate = true;
+            } else {
+              // 이미 참가자인 경우: 라인만 비우고 참가 상태 유지
+              removeFromAllLanes();
+              replyText = "라인 설정이 해제되었습니다. (라인 상관 없음)";
+              needUpdate = true;
+            }
+          } else {
+            // 특정 라인
+            const laneLabelMap = {
+              top: "탑",
+              jg: "정글",
+              mid: "미드",
+              adc: "원딜",
+              sup: "서폿"
+            };
+            const arr = lane[laneKey];
+
+            if (!isParticipant && !isWait) {
+              // 완전 신규
+              if (p.length >= cap) {
+                w.push(userName);
+                replyText = "정원 초과로 대기자로 등록되었습니다.";
+                needUpdate = true;
+              } else {
+                const emptyIdx = arr.findIndex((x) => !x);
+                if (emptyIdx === -1) {
+                  replyText = `${laneLabelMap[laneKey]} 자리가 가득 찼습니다. 다른 라인을 선택해주세요.`;
+                } else {
+                  arr[emptyIdx] = userName;
+                  p.push(userName);
+                  replyText = "참가 완료!";
+                  needUpdate = true;
+                }
+              }
+            } else if (isParticipant) {
+              // 이미 참가자인 경우: 라인 변경 또는 배정
+              const emptyIdx = arr.findIndex((x) => !x);
+              if (arr.some((n) => n === userName)) {
+                replyText = "이미 해당 라인에 배정되어 있습니다.";
+              } else if (emptyIdx === -1) {
+                replyText = `${laneLabelMap[laneKey]} 자리가 가득 찼습니다. 다른 라인을 선택해주세요.`;
+              } else {
+                // 기존 라인에서 제거 후 새 라인에 배정
+                removeFromAllLanes();
+                arr[emptyIdx] = userName;
+                replyText = "라인이 변경되었습니다.";
                 needUpdate = true;
               }
+            } else {
+              // 이 외의 이상 상태는 그냥 막아둠
+              replyText = "이미 신청한 상태입니다.";
             }
           }
         }
