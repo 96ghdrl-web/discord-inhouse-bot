@@ -540,7 +540,7 @@ async function buildSignupText(channelId, guild) {
   text += `정글 : ${joinSlots(lane.jg)}\n`;
   text += `미드 : ${joinSlots(lane.mid)}\n`;
   text += `원딜 : ${joinSlots(lane.adc)}\n`;
-  text += `서폿 : ${joinSlots(lane.sup)}\n`;
+  text += `서폿 : ${joinSlots(lane.sup)}\n\n`;
 
   text += `참가자 (${p.length}명):\n${p.length ? dp.join(" ") : "없음"}`;
   if (w.length) text += `\n\n대기자 (${w.length}명):\n${dw.join(" ")}`;
